@@ -98,10 +98,6 @@ flags.DEFINE_float("init_range", default=0.1,
 FLAGS = flags.FLAGS
 
 
-
-def _int64_feature(values):
-  return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
-
 def get_preprocessor(examples,tokenize_fn):
     """
     Input:
@@ -311,7 +307,7 @@ def prediction_graph(features):
     def cond(*args):
         return True
 
-    def body(mems,latest_tokens,prev_tokens):
+    def body(mems,latest_tokens,prev_tokens,mem_mask):
         """The main body of sampling loop.
         mem: cache memory--calculated hidden states
              of previous tokens
@@ -329,6 +325,9 @@ def prediction_graph(features):
         input_q = tf.transpose(input_q,(1,0))
         seg_id = tf.transpose(seg_id,(1,0))
         perm_mask = tf.transpose(perm_mask,(1,2,0))
+        # Set the hidden state of the padded tokens to be zero[
+        for i in range(len(mems)):
+          mems[i] = (1-mem_mask[:,:,None])*mems[i]
         # Get logits
         with tf.variable_scope("",reuse=tf.AUTO_REUSE):
             xlnet_model = xlnet.XLNetModel(
@@ -352,24 +351,30 @@ def prediction_graph(features):
         prev_tokens = sampled_tokens if prev_tokens is None \
                         else tf.concat([prev_tokens,sampled_tokens],axis=1)
         # Cache the memory of the the last latest_tokens
-        merged_mems = []
         if latest_tokens is not None:
+            merged_mems = []
             for i in range(len(mems)):
                 merged_mems.append(tf.concat([mems[i][1:],new_mems[i][:1]],axis=0))
+            mem_mask = tf.concat([mem_mask[1:],tf.zeros_like(mem_mask[:1])],axis=0)
+            return [merged_mems, sampled_tokens, prev_tokens,mem_mask]
         else:
-            return mems,sampled_tokens,prev_tokens
+            return [mems,sampled_tokens,prev_tokens,mem_mask]
                         
-        return [merged_mems, sampled_tokens, prev_tokens]
+        
 
-    mems,latest_tokens,prev_tokens=body(mems,latest_tokens,prev_tokens)
-    print(len(mems),mems[0].shape)
-    _,_,predicted_tokens = tf.while_loop(
+    mems,latest_tokens,prev_tokens,mem_mask=body(mems,
+                                                 latest_tokens,
+                                                 prev_tokens,
+                                                 inp_mask)
+
+    _,_,predicted_tokens,_ = tf.while_loop(
         cond=cond,
         body=body,
         maximum_iterations=FLAGS.num_toks_pred-1,
-        loop_vars=[mems,latest_tokens,prev_tokens],
+        loop_vars=[mems,latest_tokens,prev_tokens,mem_mask],
         shape_invariants=[
                 [tf.TensorShape([None,None,None]) for _ in range(len(mems))],
+                tf.TensorShape([None,None]),
                 tf.TensorShape([None,None]),
                 tf.TensorShape([None,None])
             ]
