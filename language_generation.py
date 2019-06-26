@@ -18,12 +18,12 @@ from collections import defaultdict as dd
 
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
-
 import sentencepiece as spm
 
 from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
 import model_utils
 import function_builder
+import xlnet
 from classifier_utils import PaddingInputExample
 from classifier_utils import convert_single_example
 from prepro_utils import preprocess_text, encode_ids
@@ -102,8 +102,7 @@ FLAGS = flags.FLAGS
 def _int64_feature(values):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
 
-def convert_examples_to_features(examples,
-                                 tokenize_fn):
+def get_preprocessor(examples,tokenize_fn):
     """
     Input:
     examples: [List[str]] input texts
@@ -111,42 +110,37 @@ def convert_examples_to_features(examples,
     Output:
     tf input features
     """
-    featurized_examples = []
-    for (ex_index, example) in enumerate(examples):
-        if ex_index % 10 == 0:
-            tf.logging.info("Featuring example {} of {}".format(ex_index,
-                                                        len(examples)))
-        tokens = tokenize_fn(example)
-        feature = {
-          "input_k": _int64_feature(tokens),
-        }
+    def generator():
+        for (ex_index, example) in enumerate(examples):
+            tokens = tokenize_fn(example)
+            yield tokens
 
-        featurized_examples.append(tf.train.Example(features=tf.train.Features(feature=feature)))
-    
-    tf.logging.info("Featurized %s examples",len(featurized_examples))
+    return generator
 
-    return featurized_examples
-
-def get_input_dataset(featurized_examples):
+def get_input_dataset(preprocessor):
     """Returns tf.data.Dataset for input"""
     batch_size = FLAGS.batch_size
     max_mem_length = FLAGS.max_mem_length
     
-    def mask(example):
+    def mask(ids):
+        example = {'input_k': ids}
         input_k = example['input_k'][-max_mem_length:]
-        seq_len = len(input_k)
-        input_mask = tf.convert_to_tensor([0]*len(seq_len))
-        if seq_len<max_mem_length:
-            pad_len = max_mem_length-seq_len
-            input_k = tf.concat([tf.zeros(pad_len),input_k],axis=0)
-            input_mask = tf.concat([[1]*pad_len,input_mask],axis=0)
+        seq_len = tf.shape(input_k)[0]
+        input_mask = tf.tile(tf.convert_to_tensor([0],dtype=tf.float32),[seq_len])
+        pad_len = tf.maximum(0,max_mem_length-seq_len)
+        pad_tensor = tf.concat([[[pad_len]],[[0]]],axis=-1)
+        input_k = tf.pad(input_k,pad_tensor,constant_values=0)
+        input_mask = tf.pad(input_mask,pad_tensor,constant_values=1)
         example['input_mask'] = input_mask
         example['input_k'] = input_k
         example['seg_id'] = tf.convert_to_tensor([0]*max_mem_length)
-        
+        return example
 
-    dataset = tf.data.Dataset.from_tensor_slices(featurized_examples)
+
+    dataset = tf.data.Dataset.from_generator(preprocessor,
+                                             output_types=tf.int32)
     dataset = dataset.map(mask)
+
     dataset = dataset.batch(batch_size,
                             drop_remainder=False)
     dataset.prefetch(1)
@@ -179,20 +173,21 @@ def inputs_and_mask(latest_tokens,batch_size):
         input_q_0 = tf.tile([[0]],[batch_size,1])
         input_q = tf.concat([input_q_0,input_q],axis=-1)
 
-        attn_masks = tf.convert_to_tensor([[0,1],[0,1]])
+        attn_masks = tf.convert_to_tensor([[0,1],[0,1]],dtype=tf.float32)
     else:
-        attn_masks = tf.convert_to_tensor([[1]])
+        attn_masks = tf.convert_to_tensor([[1]],dtype=tf.float32)
 
+    attn_masks = tf.tile(attn_masks[None,:,:],[batch_size,1,1])
     return input_k,seg_id, attn_masks, input_q
 
 
-def get_logits(xlnet_model):
+def get_logits(xlnet_model,xlnet_config):
     lookup_table = xlnet_model.get_embedding_table()
     tie_weight=False
 
     with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
         initializer = xlnet_model.get_initializer()
-        hidden = xlnet_model.get_sequence_output()[-1:-2,:,:]
+        hidden = xlnet_model.get_sequence_output()[-1:,:,:]
         n_token = xlnet_config.n_token 
         d_model = xlnet_config.d_model
 
@@ -223,13 +218,16 @@ def sample_token(logits):
     Inputs:
     logits: tf.Tensor([batch_size,len,num_tokens])
     Outpus:
-    samples: tf.Tensor([batch_size,len])
+    samples: tf.Tensor([batch_size,len,1])
     """
     #credits: https://github.com/nshepperd/gpt-2
     
     logits/=FLAGS.temperature
 
-    batch_size,seq_len,num_toks = tf.shape(logits)
+    batch_size = tf.shape(logits)[0]
+    seq_len = tf.shape(logits)[1]
+    num_toks = tf.shape(logits)[2]
+    
     
     if sampling_strategy()=='top_p':
         logits_sorted = tf.sort(logits,
@@ -251,9 +249,8 @@ def sample_token(logits):
     elif sampling_strategy()=="top_k":
         if FLAGS.top_k == 0:
             return logits
-
-        values, _ = tf.nn.top_k(logits, k=k)
-        min_values = values[:,:,-1]
+        values, _ = tf.nn.top_k(logits, k=FLAGS.top_k)
+        min_values = values[:,:,-1:]
         logits = tf.where(
             logits < min_values,
             tf.ones_like(logits, dtype=logits.dtype) * -1e10,
@@ -266,9 +263,9 @@ def sample_token(logits):
 
     samples = tf.random.categorical(logits,
                           num_samples=1,
-                          output_dtype=tf.int32)
+                          dtype=tf.int32)
 
-    return tf.reshape(samples,(batch_size,seq_len))
+    return tf.reshape(samples,(batch_size,seq_len,1))
 
 
 
@@ -291,10 +288,9 @@ def prediction_graph(features):
     ## Model config
     xlnet_config = xlnet.XLNetConfig(json_path=FLAGS.model_config_path)
     run_config = xlnet.create_run_config(False, True, FLAGS)
-    run_config.mem_len = max_mem_length
+    run_config.mem_len = FLAGS.max_mem_length
 
-    perm_mask = _create_mask(tf.shape(inp)[0],tf.shape(inp)[0])
-
+    perm_mask = _create_mask(tf.shape(inp)[0],0)[:,:,None]
     # Getting the hidden states for the prompts
     xlnet_model = xlnet.XLNetModel(
       xlnet_config=xlnet_config,
@@ -328,6 +324,7 @@ def prediction_graph(features):
                                 inputs_and_mask(latest_tokens,
                                                 batch_size)
 
+
         input_k = tf.transpose(input_k,(1,0))
         input_q = tf.transpose(input_q,(1,0))
         seg_id = tf.transpose(seg_id,(1,0))
@@ -340,9 +337,10 @@ def prediction_graph(features):
               input_ids=input_k,
               seg_ids=seg_id,
               perm_mask=perm_mask,
-              mems=mems)
+              mems=mems,
+              input_mask=None)
 
-            logits = get_logits(xlnet_model)
+            logits = get_logits(xlnet_model,xlnet_config)
 
         # Getting new memory
         new_mems = xlnet_model.get_new_memory()
@@ -350,26 +348,30 @@ def prediction_graph(features):
         # sample a token
         logits = tf.transpose(logits,(1,0,2))
         sampled_tokens = sample_token(logits)
-
+        sampled_tokens = sampled_tokens[:,-1,:] # Last token
         prev_tokens = sampled_tokens if prev_tokens is None \
                         else tf.concat([prev_tokens,sampled_tokens],axis=1)
         # Cache the memory of the the last latest_tokens
-        if latest_tokens:
-            mems = [tf.concat(_mem[1:],_new_mem[:1]) 
-                    for _mem,_new_mem in zip(mems,new_mems)]
-        return mems, sampled_tokens, prev_tokens
+        merged_mems = []
+        if latest_tokens is not None:
+            for i in range(len(mems)):
+                merged_mems.append(tf.concat([mems[i][1:],new_mems[i][:1]],axis=0))
+        else:
+            return mems,sampled_tokens,prev_tokens
+                        
+        return [merged_mems, sampled_tokens, prev_tokens]
 
     mems,latest_tokens,prev_tokens=body(mems,latest_tokens,prev_tokens)
-
+    print(len(mems),mems[0].shape)
     _,_,predicted_tokens = tf.while_loop(
         cond=cond,
         body=body,
         maximum_iterations=FLAGS.num_toks_pred-1,
         loop_vars=[mems,latest_tokens,prev_tokens],
         shape_invariants=[
-                list(map(lambda x: x.shape,mems)),
-                tf.shape(latest_tokens),
-                tf.TensorShape([batch_size,None])
+                [tf.TensorShape([None,None,None]) for _ in range(len(mems))],
+                tf.TensorShape([None,None]),
+                tf.TensorShape([None,None])
             ]
         )
 
@@ -403,10 +405,10 @@ def main(unused_argv):
         """Given a list of texts in examples
         return the result"""
         num_examples = len(examples)
-        num_batches = np.ceil(num_examples/FLAGS.batch_size)
-        features = convert_examples_to_features(examples,
+        num_batches = int(np.ceil(num_examples/FLAGS.batch_size))
+        preprocessor = get_preprocessor(examples,
                                                 tokenize_fn)
-        dataset = get_input_dataset(features)
+        dataset = get_input_dataset(preprocessor)
         example = dataset.make_one_shot_iterator().get_next()
         predicted_tokens = prediction_graph(example)
 
