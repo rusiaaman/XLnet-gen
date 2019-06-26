@@ -68,20 +68,6 @@ flags.DEFINE_integer("max_mem_length", default=128,
            " which each predicted token is conditioned upon"
            ". Directly increases the memory requirement")
 
-# task specific
-
-flags.DEFINE_integer("shuffle_buffer", default=2048,
-      help="Buffer size used for shuffle.")
-flags.DEFINE_integer("num_passes", default=1,
-      help="Num passes for processing training data. "
-      "This is use to batch data without loss for TPUs.")
-flags.DEFINE_bool("uncased", default=False,
-      help="Use uncased.")
-flags.DEFINE_string("cls_scope", default=None,
-      help="Classifier layer scope.")
-flags.DEFINE_bool("is_regression", default=False,
-      help="Whether it's a regression task.")
-
 FLAGS = flags.FLAGS
 
 
@@ -132,23 +118,76 @@ def inputs_and_mask(latest_tokens):
 
     return input_k,attn_masks,input_q
 
+
+def get_logits(xlnet_model):
+    lookup_table = xlnet_model.get_embedding_table()
+    tie_weight=False
+
+    with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+        initializer = xlnet_model.get_initializer()
+        hidden = xlnet_model.get_sequence_output()[-1:-2,:,:]
+        n_token = xlnet_config.n_token 
+        d_model = xlnet_config.d_model
+
+        with tf.variable_scope('lm_loss'):
+            if tie_weight:
+              assert lookup_table is not None, \
+                  'lookup_table cannot be None for tie_weight'
+              softmax_w = lookup_table
+            else:
+              softmax_w = tf.get_variable('weight', [n_token, d_model],
+                                          dtype=hidden.dtype, initializer=initializer)
+
+            softmax_b = tf.get_variable('bias', [n_token], dtype=hidden.dtype,
+                                        initializer=tf.zeros_initializer())
+
+            logits = tf.einsum('ibd,nd->ibn', hidden, softmax_w) + softmax_b
+
+    return logits
+
 def prediction_graph(features,mems):
     """Gets features and mems and
-    return predicted tokens"""
+    return predicted tokens
+    features: Dict[str:tf.train.features] Contains following features:
+              input_k
+              seg_id
+              input_mask
+    """
 
-    #Building prediction graph
-    ## First caching the hidden states of the prompt
+    # Building prediction graph
+    ## Transforming features for batch channel on last axis
+    inp = tf.transpose(features["input_k"], [1, 0])
+    seg_id = tf.transpose(features["seg_id"], [1, 0])
+    inp_mask = tf.transpose(features["input_mask"], [1, 0])
 
-    input_q = 
-    ## Loop
-    num_tokens = 0
+    ## Model config
+    xlnet_config = xlnet.XLNetConfig(json_path=FLAGS.model_config_path)
+    run_config = xlnet.create_run_config(False, True, FLAGS)
+    run_config.mem_len = max_mem_length
+
+    perm_mask = get_causal_attention_mask(tf.shape(inp)[0],tf.shape(inp)[0])
+
+    # Getting the hidden states for the prompts
+    xlnet_model = xlnet.XLNetModel(
+      xlnet_config=xlnet_config,
+      run_config=run_config,
+      input_ids=inp,
+      seg_ids=seg_id,
+      input_mask=inp_mask,
+      perm_mask=perm_mask,
+      mems=mems)
+
+    logits = get_logits(xlnet_model)
+    
+    # getting new memory
+    mems = xlnet_model.get_new_memory()
+
+    latest_tokens = None
     prev_tokens = None
-    latest_token = None
-
     def cond(*args):
         return True
 
-    def body(mem,latest_tokens,prev_tokens)
+    def body(mems,latest_tokens,prev_tokens):
         """The main body of sampling loop.
         mem: cache memory--calculated hidden states
              of previous tokens
@@ -157,9 +196,26 @@ def prediction_graph(features,mems):
         """
 
         # get dummy input token and permutation mask
-        input_k, perm_mask, input_q = inputs_and_mask(latest_tokens)
+        input_k, seg_id, perm_mask, input_q = inputs_and_mask(latest_tokens)
         # Get logits
-        logits = 
+        with tf.variable_scope("",reuse=tf.AUTO_REUSE):
+            xlnet_model = xlnet.XLNetModel(
+              xlnet_config=xlnet_config,
+              run_config=run_config,
+              input_ids=input_k,
+              seg_ids=seg_id,
+              perm_mask=perm_mask,
+              mems=mems) 
+
+        
+        
+
+        with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+
+
+        # Getting new memory
+        new_mems = xlnet_model.get_new_memory()
+
         # sample a token
         sampled_tokens =
         prev_tokens = sampled_tokens if prev_tokens is None \
@@ -196,4 +252,13 @@ def main():
 
 
 if __name__=="__main__":
-      tf.app.run()
+    # Fixed flags
+    FLAGS.use_tpu = False #TPU won't be used for prediction
+    FLAGS.use_bfloat16 = False
+    FLAGS.dropout = 0
+    FLAGS.dropatt = 0
+    FLAGS.init = 'uniform' #doesn't matter
+    FLAGS.init_std=0.02
+    FLAGS.init_range=0.1
+
+    tf.app.run()
