@@ -183,7 +183,7 @@ def inputs_and_mask(latest_tokens,batch_size):
 
 def get_logits(xlnet_model,xlnet_config):
     lookup_table = xlnet_model.get_embedding_table()
-    tie_weight=False
+    tie_weight=True
 
     with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
         initializer = xlnet_model.get_initializer()
@@ -429,7 +429,7 @@ def main(unused_argv):
         outputs = predict([text]*FLAGS.num_samples)
         for i,output in enumerate(outputs):
             print("--------SAMPLE No. {}---------\n".format(i))
-            print(sp.decode_ids(output))
+            print(sp.decode_ids(output.tolist()))
     else:
         raise NotImplementedError("WIP file reading")
 
