@@ -18,6 +18,7 @@ from collections import defaultdict as dd
 
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
+#tf.enable_eager_execution()
 import sentencepiece as spm
 
 from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
@@ -99,10 +100,7 @@ FLAGS = flags.FLAGS
 
 
 
-def _int64_feature(values):
-  return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
-
-def get_preprocessor(examples,tokenize_fn):
+def get_preprocessor(examples,tokenize_fn,PAD_IDS):
     """
     Input:
     examples: [List[str]] input texts
@@ -113,7 +111,7 @@ def get_preprocessor(examples,tokenize_fn):
     def generator():
         for (ex_index, example) in enumerate(examples):
             tokens = tokenize_fn(example)
-            yield tokens
+            yield PAD_IDS+tokens
 
     return generator
 
@@ -178,6 +176,7 @@ def inputs_and_mask(latest_tokens,batch_size):
         attn_masks = tf.convert_to_tensor([[1]],dtype=tf.float32)
 
     attn_masks = tf.tile(attn_masks[None,:,:],[batch_size,1,1])
+    input_q = tf.cast(input_q,tf.float32)
     return input_k,seg_id, attn_masks, input_q
 
 
@@ -338,7 +337,8 @@ def prediction_graph(features):
               seg_ids=seg_id,
               perm_mask=perm_mask,
               mems=mems,
-              input_mask=None)
+              input_mask=None,
+              inp_q=input_q)
 
             logits = get_logits(xlnet_model,xlnet_config)
 
@@ -355,14 +355,13 @@ def prediction_graph(features):
         merged_mems = []
         if latest_tokens is not None:
             for i in range(len(mems)):
-                merged_mems.append(tf.concat([mems[i][1:],new_mems[i][:1]],axis=0))
+                merged_mems.append(tf.concat([mems[i][1:2],new_mems[i][:-1]],axis=0))
         else:
             return mems,sampled_tokens,prev_tokens
                         
         return [merged_mems, sampled_tokens, prev_tokens]
 
     mems,latest_tokens,prev_tokens=body(mems,latest_tokens,prev_tokens)
-    print(len(mems),mems[0].shape)
     _,_,predicted_tokens = tf.while_loop(
         cond=cond,
         body=body,
@@ -401,13 +400,19 @@ def main(unused_argv):
         text = preprocess_text(text, lower=FLAGS.uncased)
         return encode_ids(sp, text)
 
+
+    PAD_TXT = """In 1991, the remains of Russian Tsar Nicholas II and his family (except for Alexei and Maria) are discovered. The voice of Nicholas's young son, Tsarevich Alexei Nikolaevich, narrates the remainder of the story. 1883 Western Siberia, a young Grigori Rasputin is asked by his father and a group of men to perform magic. Rasputin has a vision and denounces one of the men as a horse thief. Although his father initially slaps him for making such an accusation, Rasputin watches as the man is chased outside and beaten. Twenty years later, Rasputin sees a vision of the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famous, with people, even a bishop, begging for his blessing. """
+    PAD_IDS = tokenize_fn(PAD_TXT)
+    PAD_IDS.append(7)
+
+
     def predict(examples):
         """Given a list of texts in examples
         return the result"""
         num_examples = len(examples)
         num_batches = int(np.ceil(num_examples/FLAGS.batch_size))
         preprocessor = get_preprocessor(examples,
-                                                tokenize_fn)
+                                                tokenize_fn,PAD_IDS)
         dataset = get_input_dataset(preprocessor)
         example = dataset.make_one_shot_iterator().get_next()
         predicted_tokens = prediction_graph(example)
