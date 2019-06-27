@@ -18,7 +18,7 @@ from collections import defaultdict as dd
 
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
-#tf.enable_eager_execution()
+tf.enable_eager_execution()
 import sentencepiece as spm
 
 from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
@@ -310,7 +310,19 @@ def prediction_graph(features):
     def cond(*args):
         return True
 
-    def body(mems,latest_tokens,prev_tokens):
+    def recalc(inp,inp_mask,seg_id,perm_mask):
+        input_q = tf.zeros_like(inp,dtype=tf.float32)
+        inp = tf.pad(inp,tf.convert_to_tensor([[0,1],[0,0]]),constant_values=0)
+        inp_mask = tf.pad(inp_mask,tf.convert_to_tensor([[0,1],[0,0]]),constant_values=0)
+        seg_id = tf.pad(seg_id,tf.convert_to_tensor([[0,1],[0,0]]),constant_values=0)
+        perm_mask = tf.concat([perm_mask,tf.ones(tf.shape(perm_mask)[0:1],dtype=tf.float32)[:,None,None]],axis=1)
+        perm_mask = tf.concat([perm_mask,tf.concat([tf.zeros(tf.shape(perm_mask)[1:2]-1,dtype=tf.float32),tf.ones([1],dtype=tf.float32)],axis=0)[None,:,None]],axis=0)
+        input_q = tf.pad(input_q,tf.convert_to_tensor([[0,1],[0,0]]),constant_values=1)
+
+        return inp[1:],inp_mask[1:],perm_mask[1:,1:],input_q[1:],seg_id[1:]
+
+
+    def body(inp,inp_mask,seg_id,perm_mask,prev_tokens):
         """The main body of sampling loop.
         mem: cache memory--calculated hidden states
              of previous tokens
@@ -319,26 +331,18 @@ def prediction_graph(features):
         """
 
         # get dummy input token and permutation mask
-        input_k, seg_id, perm_mask, input_q = \
-                                inputs_and_mask(latest_tokens,
-                                                batch_size)
-
-
-        input_k = tf.transpose(input_k,(1,0))
-        input_q = tf.transpose(input_q,(1,0))
-        seg_id = tf.transpose(seg_id,(1,0))
-        perm_mask = tf.transpose(perm_mask,(1,2,0))
+        import pdb; pdb.set_trace()
+        input_k,input_mask,perm_mask,input_q,seg_id= recalc(inp,inp_mask,seg_id,perm_mask)
         # Get logits
         with tf.variable_scope("",reuse=tf.AUTO_REUSE):
             xlnet_model = xlnet.XLNetModel(
-              xlnet_config=xlnet_config,
-              run_config=run_config,
-              input_ids=input_k,
-              seg_ids=seg_id,
-              perm_mask=perm_mask,
-              mems=mems,
-              input_mask=None,
-              inp_q=input_q)
+                  xlnet_config=xlnet_config,
+                  run_config=run_config,
+                  input_ids=inp,
+                  seg_ids=seg_id,
+                  input_mask=inp_mask,
+                  perm_mask=perm_mask,
+                  input_q=input_q)
 
             logits = get_logits(xlnet_model,xlnet_config)
 
@@ -351,29 +355,26 @@ def prediction_graph(features):
         sampled_tokens = sampled_tokens[:,-1,:] # Last token
         prev_tokens = sampled_tokens if prev_tokens is None \
                         else tf.concat([prev_tokens,sampled_tokens],axis=1)
-        # Cache the memory of the the last latest_tokens
-        merged_mems = []
-        if latest_tokens is not None:
-            for i in range(len(mems)):
-                merged_mems.append(tf.concat([mems[i][1:2],new_mems[i][:-1]],axis=0))
-        else:
-            return mems,sampled_tokens,prev_tokens
-                        
-        return [merged_mems, sampled_tokens, prev_tokens]
 
-    mems,latest_tokens,prev_tokens=body(mems,latest_tokens,prev_tokens)
-    _,_,predicted_tokens = tf.while_loop(
+        input_k = tf.concat([input_k[:-1],tf.transpose(sampled_tokens,(1,0))],axis=0)
+        perm_mask = _create_mask(tf.shape(input_k)[0],0)[:,:,None]
+        return [input_k,input_mask,seg_id,perm_mask,prev_tokens]
+
+    inp,inp_mask,seg_id,perm_mask,prev_tokens=body(inp,inp_mask,seg_id,perm_mask,prev_tokens)
+    args = tf.while_loop(
         cond=cond,
         body=body,
         maximum_iterations=FLAGS.num_toks_pred-1,
-        loop_vars=[mems,latest_tokens,prev_tokens],
+        loop_vars=[inp,inp_mask,seg_id,perm_mask,prev_tokens],
         shape_invariants=[
-                [tf.TensorShape([None,None,None]) for _ in range(len(mems))],
                 tf.TensorShape([None,None]),
-                tf.TensorShape([None,None])
+                tf.TensorShape([None,None]),
+                tf.TensorShape([None,None]),
+                tf.TensorShape([None,None,None]),
+                tf.TensorShape([None,None]),
             ]
         )
-
+    predicted_tokens = args[-1]
     return predicted_tokens   
 
 
