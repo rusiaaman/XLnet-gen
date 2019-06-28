@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 from os.path import join
-from absl import flags
+import argparse
 import os
 import sys
 import csv
@@ -32,71 +32,74 @@ from modeling import _create_mask
 
 CLS_ID = 3 #[CLS] token ID
 
+parser = argparse.ArgumentParser()
 # Model
-flags.DEFINE_string("model_config_path", default=None,
-      help="Model config path.")
-flags.DEFINE_integer("clamp_len", default=-1,
-      help="Clamp length")
-flags.DEFINE_bool("same_length", default=False,
-      help="Same length attention")
+parser.add_argument("--model_config_path", default=None,
+      help="Model config path.",type=str)
+parser.add_argument("--clamp_len", default=-1,
+      help="Clamp length",type=int)
+parser.add_argument("--same_length", default=False,
+      help="Same length attention", action='store_true')
 
 # Data and memory
-flags.DEFINE_integer("batch_size",default=1,help='batch size')
-flags.DEFINE_integer("max_mem_length", default=128, 
+parser.add_argument("--batch_size",default=1,help='batch size',type=int)
+parser.add_argument("--max_mem_length", default=128, 
       help="Max sequence length for cached hidden states"
            " which each predicted token is conditioned upon"
-           ". Directly increases the memory requirement")
-flags.DEFINE_bool("uncased", False,
-      help="Use uncased inputs or not.")
+           ". Directly increases the memory requirement",type=int)
+parser.add_argument("--uncased", default=False,
+      help="Use uncased inputs or not.",action='store_true')
 
 # I/O paths
-flags.DEFINE_string("init_checkpoint", default=None,
+parser.add_argument("--init_checkpoint", default=None,
       help="checkpoint path for initializing the model. "
       "Could be a pretrained model or a finetuned model.")
-flags.DEFINE_string("spiece_model_file", default="",
+parser.add_argument("--spiece_model_file", default="",
       help="Sentence Piece model path.")
-flags.DEFINE_string("input_file", default="",
+parser.add_argument("--input_file", default="",
       help="File containing new line separated prompts "
             "for conditional sampling")
 
 # prediction
-flags.DEFINE_integer("num_samples",default=1,
-      help="Number of samples to predict per instance")
-flags.DEFINE_bool("interactive", default=True,
-      help="Flag for interactive prediction through command line")
-flags.DEFINE_bool("unconditional", default=True,
-      help="Prints samples wihtout any prompt")
-flags.DEFINE_float("top_p", default=0,
-      help="Top-p coverage to use. Set 0 to use top_k sampling")
-flags.DEFINE_integer("top_k", default=40,
+parser.add_argument("--num_samples",default=1,
+      help="Number of samples to predict per instance",type=int)
+parser.add_argument("--interactive", default=True,
+      help="Flag for interactive prediction through command line",action='store_true')
+parser.add_argument("--unconditional", default=True,
+      help="Prints samples wihtout any prompt",action='store_true')
+parser.add_argument("--top_p", default=0,
+      help="Top-p coverage to use. Set 0 to use top_k sampling",type=float)
+parser.add_argument("--top_k", default=40,
       help="Top-k sampling strategy parameter. Use only when top-p is zero. Set"
-            "-1 to use all the samples")
-flags.DEFINE_integer("temperature", default=1,
-      help="Scaling factor for logits")
-flags.DEFINE_integer("num_toks_pred", default=1024,
-      help="Number of tokens to predict")
+            "-1 to use all the samples",type=int)
+parser.add_argument("--temperature", default=1,
+      help="Scaling factor for logits",type=int)
+parser.add_argument("--num_toks_pred", default=1024,
+      help="Number of tokens to predict",type=int)
+parser.add_argument("--confidences", default=False,
+      help="Print confidences",action='store_true')
 
 # Static flags, do not change
-flags.DEFINE_bool("use_tpu", default=False,
-      help="TPU can't be used for inference. Do not set")
-flags.DEFINE_bool("use_bfloat16", False,
-      help="Whether to use bfloat16. Not implemented")
-flags.DEFINE_float("dropout", default=0,
+parser.add_argument("--use_tpu", default=False,
+      help="TPU can't be used for inference. Do not set",action='store_true')
+parser.add_argument("--use_bfloat16", default=False,
+      help="Whether to use bfloat16. Not implemented",action='store_true')
+parser.add_argument("--dropout", default=0,
       help="Dropout rate. Do not change.")
-flags.DEFINE_float("dropatt", default=0,
-      help="Attention dropout rate. Do not change.")
+parser.add_argument("--dropatt", default=0,
+      help="Attention dropout rate. Do not change.",type=float)
 
 
-flags.DEFINE_enum("init", default="normal",
-      enum_values=["normal", "uniform"],
+parser.add_argument("--init", default="normal",
+      choices=["normal", "uniform"],
       help="Initialization method.")
-flags.DEFINE_float("init_std", default=0.02,
-      help="Initialization std when init is normal.")
-flags.DEFINE_float("init_range", default=0.1,
-      help="Initialization std when init is uniform.")
+parser.add_argument("--init_std", default=0.02,
+      help="Initialization std when init is normal.",type=float)
+parser.add_argument("--init_range", default=0.1,
+      help="Initialization std when init is uniform.",type=float)
 
 
-FLAGS = flags.FLAGS
+FLAGS = parser.parse_args()
 
 
 
@@ -227,7 +230,6 @@ def sample_token(logits):
     seq_len = tf.shape(logits)[1]
     num_toks = tf.shape(logits)[2]
     
-    
     if sampling_strategy()=='top_p':
         logits_sorted = tf.sort(logits,
                                 direction="DESCENDING",
@@ -241,7 +243,7 @@ def sample_token(logits):
                                  tf.ones_like(logits_sorted)*100)
         min_logits = tf.reduce_min(logits_masked,axis=-1)
 
-        logits = tf.where(logits<min_logits,
+        logits_masked = tf.where(logits<min_logits,
                           tf.ones_like(logits)*-1e10,
                           logits)
 
@@ -249,7 +251,7 @@ def sample_token(logits):
         if FLAGS.top_k != 0:
             values, _ = tf.nn.top_k(logits, k=FLAGS.top_k)
             min_values = values[:,:,-1:]
-            logits = tf.where(
+            logits_masked = tf.where(
                 logits < min_values,
                 tf.ones_like(logits, dtype=logits.dtype) * -1e10,
                 logits,
@@ -257,20 +259,24 @@ def sample_token(logits):
     else:
         raise NotImplementedError("Invalid sampling strategy")
 
-    logits = tf.reshape(logits,(-1,num_toks))
+    logits_masked = tf.reshape(logits_masked,(-1,num_toks))
 
-    samples = tf.random.categorical(logits,
+    samples = tf.random.categorical(logits_masked,
                           num_samples=1,
                           dtype=tf.int32)
 
-    return tf.reshape(samples,(batch_size,seq_len,1))
+    probs = tf.nn.softmax(tf.reshape(logits,(-1,num_toks)),axis=-1)
+    confidences = tf.gather_nd(params=probs,batch_dims=1,indices=samples)
+
+    return tf.reshape(samples,(batch_size,seq_len,1)),\
+           tf.reshape(confidences,(batch_size,seq_len,1))
 
 
 
 
 def prediction_graph(features):
     """Gets features and
-    return predicted tokens
+    return predicted tokens)
     features: Dict[str:tf.train.features] Contains following features:
               input_k
               seg_id
@@ -304,6 +310,7 @@ def prediction_graph(features):
 
     latest_tokens = None
     prev_tokens = None
+    prev_conf = None
     batch_size = tf.shape(mems[0])[1]
 
     def cond(*args):
@@ -321,7 +328,7 @@ def prediction_graph(features):
         return inp[1:],inp_mask[1:],perm_mask[1:,1:],input_q[1:],seg_id[1:]
 
 
-    def body(inp,inp_mask,seg_id,perm_mask,prev_tokens):
+    def body(inp,inp_mask,seg_id,perm_mask,prev_tokens,prev_conf):
         """The main body of sampling loop.
         mem: cache memory--calculated hidden states
              of previous tokens
@@ -348,39 +355,42 @@ def prediction_graph(features):
 
         # sample a token
         logits = tf.transpose(logits,(1,0,2))
-        sampled_tokens = sample_token(logits)
+        sampled_tokens,confidences = sample_token(logits)
         sampled_tokens = sampled_tokens[:,-1,:] # Last token
+        confidences = confidences[:,-1,:]
         prev_tokens = sampled_tokens if prev_tokens is None \
                         else tf.concat([prev_tokens,sampled_tokens],axis=1)
+        prev_conf= confidences if prev_conf is None \
+                        else tf.concat([prev_conf,confidences],axis=1)
 
         input_k = tf.concat([input_k[:-1],tf.transpose(sampled_tokens,(1,0))],axis=0)
         perm_mask = _create_mask(tf.shape(input_k)[0],0)[:,:,None]
-        return [input_k,input_mask,seg_id,perm_mask,prev_tokens]
+        return [input_k,input_mask,seg_id,perm_mask,prev_tokens,prev_conf]
 
-    inp,inp_mask,seg_id,perm_mask,prev_tokens=body(inp,inp_mask,seg_id,perm_mask,prev_tokens)
+    inp,inp_mask,seg_id,perm_mask,prev_tokens,prev_conf=body(inp,inp_mask,seg_id,perm_mask,prev_tokens,prev_conf)
     args = tf.while_loop(
         cond=cond,
         body=body,
         maximum_iterations=FLAGS.num_toks_pred-1,
-        loop_vars=[inp,inp_mask,seg_id,perm_mask,prev_tokens],
+        loop_vars=[inp,inp_mask,seg_id,perm_mask,prev_tokens,prev_conf],
         shape_invariants=[
                 tf.TensorShape([None,None]),
                 tf.TensorShape([None,None]),
                 tf.TensorShape([None,None]),
                 tf.TensorShape([None,None,None]),
                 tf.TensorShape([None,None]),
+                tf.TensorShape([None,None]),
             ]
         )
-    predicted_tokens = args[-1]
-    return predicted_tokens   
+    predicted_tokens,predicted_confs = args[-2:]
+    return predicted_tokens,predicted_confs
 
 
 
 
-def main(unused_argv):
+def main():
     """Main function routine"""
 
-    del unused_argv #unncessary args like file name
 
     # Fixed flags
     if FLAGS.use_tpu:
@@ -419,24 +429,28 @@ def main(unused_argv):
         gpu_options = tf.GPUOptions(allow_growth=True)
         model_utils.init_from_checkpoint(FLAGS, global_vars=False)
         outputs = []
+        confs = []
         with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
                         gpu_options=gpu_options)) as sess:
             sess.run(tf.global_variables_initializer())
             for _ in range(num_batches):
-                output = sess.run(predicted_tokens)
+                output,conf = sess.run(predicted_tokens)
                 outputs.extend(output)
-        return outputs
+                confs.extend(conf)
+        return outputs,confs
 
     if FLAGS.interactive:
         text = input("----PROMPT---\n")
-        outputs = predict([text]*FLAGS.num_samples)
+        outputs,confs = predict([text]*FLAGS.num_samples)
         for i,output in enumerate(outputs):
             print("--------SAMPLE No. {}---------\n".format(i))
             print(sp.decode_ids(output.tolist()))
+            if FLAGS.confidences:
+                print(confs[i])
     else:
         raise NotImplementedError("WIP file reading")
 
 
 if __name__=="__main__":
-
-    tf.app.run()
+    print("Args: {}".format(vars(FLAGS)))
+    main()
