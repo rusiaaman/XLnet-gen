@@ -179,6 +179,7 @@ class XLNetModel(object):
         Only used during pretraining for two-stream attention.
         Set to None during finetuning.
     """
+    tf.logging.info("Unused args in XLNetModel {}".format(kwargs))
 
     initializer = _get_initializer(run_config)
 
