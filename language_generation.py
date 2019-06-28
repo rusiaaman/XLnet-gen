@@ -18,7 +18,7 @@ from collections import defaultdict as dd
 
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
-tf.enable_eager_execution()
+#tf.enable_eager_execution()
 import sentencepiece as spm
 
 from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
@@ -246,15 +246,14 @@ def sample_token(logits):
                           logits)
 
     elif sampling_strategy()=="top_k":
-        if FLAGS.top_k == 0:
-            return logits
-        values, _ = tf.nn.top_k(logits, k=FLAGS.top_k)
-        min_values = values[:,:,-1:]
-        logits = tf.where(
-            logits < min_values,
-            tf.ones_like(logits, dtype=logits.dtype) * -1e10,
-            logits,
-        )
+        if FLAGS.top_k != 0:
+            values, _ = tf.nn.top_k(logits, k=FLAGS.top_k)
+            min_values = values[:,:,-1:]
+            logits = tf.where(
+                logits < min_values,
+                tf.ones_like(logits, dtype=logits.dtype) * -1e10,
+                logits,
+            )
     else:
         raise NotImplementedError("Invalid sampling strategy")
 
@@ -331,20 +330,18 @@ def prediction_graph(features):
         """
 
         # get dummy input token and permutation mask
-        import pdb; pdb.set_trace()
         input_k,input_mask,perm_mask,input_q,seg_id= recalc(inp,inp_mask,seg_id,perm_mask)
         # Get logits
-        with tf.variable_scope("",reuse=tf.AUTO_REUSE):
-            xlnet_model = xlnet.XLNetModel(
-                  xlnet_config=xlnet_config,
-                  run_config=run_config,
-                  input_ids=inp,
-                  seg_ids=seg_id,
-                  input_mask=inp_mask,
-                  perm_mask=perm_mask,
-                  input_q=input_q)
+        xlnet_model = xlnet.XLNetModel(
+              xlnet_config=xlnet_config,
+              run_config=run_config,
+              input_ids=input_k,
+              seg_ids=seg_id,
+              input_mask=inp_mask,
+              perm_mask=perm_mask,
+              inp_q=input_q)
 
-            logits = get_logits(xlnet_model,xlnet_config)
+        logits = get_logits(xlnet_model,xlnet_config)
 
         # Getting new memory
         new_mems = xlnet_model.get_new_memory()
