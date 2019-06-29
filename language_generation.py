@@ -20,9 +20,6 @@ import xlnet
 from prepro_utils import preprocess_text, encode_ids
 
 
-def _create_mask(qlen, mlen):
-    klen = qlen + mlen
-    return tf.zeros((qlen, klen))
 
 EOP_ID = special_symbols["<eop>"]
 
@@ -88,6 +85,12 @@ parser.add_argument("--autoregressive", help="Use autoregressive approach"
 
 FLAGS = parser.parse_args()
 
+
+def _create_mask(qlen, mlen):
+    """Simple bi-directional attention mask. Attend
+    to all token in sequence and memory"""
+    klen = qlen + mlen
+    return tf.zeros((qlen, klen))
 
 def get_preprocessor(examples, tokenize_fn, pad_ids):
     """
@@ -590,24 +593,21 @@ def main():
             num_examples = len(examples)
             num_batches = int(np.ceil(num_examples / FLAGS.batch_size))
 
-            outputs = []
-            confs = []
             for _ in tqdm(range(num_batches)):
                 inputs = sess.run(example)
                 output, conf = sess.run(
                     predictions, feed_dict={
                         features[k]: v for k, v in inputs.items()})
-                outputs.extend(output)
-                confs.extend(conf)
-            return outputs, confs
+                for _output,_conf in zip(output,conf):
+                    yield _output,_conf
 
         if FLAGS.interactive:
             tf.logging.info("Interactive flag received."
                             " Ignoring input files if any.")
             while True:
                 text = input("----PROMPT----\n")
-                outputs, _ = predict([text] * FLAGS.num_samples)
-                for i, output in enumerate(outputs):
+                outputs = predict([text] * FLAGS.num_samples)
+                for i, (output,_) in enumerate(outputs):
                     out = parse_ids(output.tolist())
                     print("======SAMPLE {}======".format(i))
                     print(out)
@@ -624,6 +624,10 @@ def main():
                 for line in f:
                     if line.strip()=="":
                         if text!="":
+                            # Removing the last <eop> of prompt
+                            # since it is not desired
+                            if text.endswith("<eop>"):
+                                text=text[:-5]
                             texts.extend([text]*FLAGS.num_samples)
                             text=""
                         continue
@@ -635,12 +639,13 @@ def main():
                             len(texts)//FLAGS.num_samples)
             tf.logging.info("Sampling each line %s times",FLAGS.num_samples)
 
-            outputs, _ = predict(texts)
+            outputs = iter(predict(texts))
             with open(os.path.join(FLAGS.input_file+".xlnet"),'w') as f:
-                for i in range(0,len(outputs),FLAGS.num_samples):
+                for i in range(0,len(texts),FLAGS.num_samples):
                     f.write("\n======Example {}=================\n".format(i))
                     f.write(texts[i])
-                    for j,output in enumerate(outputs[i:i+FLAGS.num_samples]):
+                    for j in range(FLAGS.num_samples):
+                        output,_ = next(outputs)
                         out = parse_ids(output.tolist())
                         f.write("\n======Example {} SAMPLE {}======\n".format(i,j))
                         f.write(out)
