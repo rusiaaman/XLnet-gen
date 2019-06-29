@@ -617,6 +617,7 @@ def main():
             " input file or set interactive flag for command line input"
             assert os.path.exists(FLAGS.input_file), FLAGS.input_file+\
             " does not exists"
+
             with open(FLAGS.input_file) as f:
                 texts = []
                 text = ""
@@ -625,9 +626,7 @@ def main():
                         if text!="":
                             texts.extend([text]*FLAGS.num_samples)
                             text=""
-                            break
-                        else:
-                            continue
+                        continue
                     text+=re.sub(r'\n','<eop>',line)
                 if text!="":
                     texts.extend([text]*FLAGS.num_samples)
