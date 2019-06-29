@@ -454,7 +454,6 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
   tf.logging.info('memory input {}'.format(mems))
   tf_float = tf.bfloat16 if use_bfloat16 else tf.float32
   tf.logging.info('Use float type {}'.format(tf_float))
-  DEBUGS = [inp_k,inp_q]
   new_mems = []
   with tf.variable_scope(scope):
     if untie_r:
@@ -514,7 +513,6 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
                              dtype=tf_float)
     else:
       non_tgt_mask = None
-    DEBUGS.extend([attn_mask,non_tgt_mask])
     ##### Word embedding
     word_emb_k, lookup_table = embedding_lookup(
         x=inp_k,
@@ -654,7 +652,7 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
     else:
       output = tf.layers.dropout(output_h, dropout, training=is_training)
 
-    return output, new_mems, lookup_table, DEBUGS
+    return output, new_mems, lookup_table
 
 
 def lm_loss(hidden, target, n_token, d_model, initializer, lookup_table=None,
