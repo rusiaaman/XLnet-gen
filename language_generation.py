@@ -615,6 +615,8 @@ def main():
                     print("======SAMPLE {}======".format(i))
                     print(out)
                     print("=====================")
+                if FLAGS.unconditional:
+                    break
         else:
             assert FLAGS.input_file!="", "Please provide either an"\
             " input file or set interactive flag for command line input"
