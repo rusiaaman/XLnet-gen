@@ -299,7 +299,7 @@ def sample_token(logits):
 
 
 
-def prediction_graph(features):
+def prediction_graph():
     """Gets features and
     return predicted tokens)
     features: Dict[str:tf.train.features] Contains following features:
@@ -308,6 +308,13 @@ def prediction_graph(features):
               input_mask
     """
 
+    features = {
+      "input_k": tf.placeholder(tf.int32,(None,None)),
+      "seg_id": tf.placeholder(tf.int32,(None,None)),
+      "input_mask": tf.placeholder(tf.float32,(None,None))
+    }
+
+    
     # Building prediction graph
     ## Transforming features for batch channel on last axis
     inp = tf.transpose(features["input_k"], [1, 0])
@@ -402,7 +409,7 @@ def prediction_graph(features):
             ]
         )
     predicted_tokens,predicted_confs = args[-2:]
-    return predicted_tokens,predicted_confs
+    return (predicted_tokens,predicted_confs),features
 
 
 
@@ -427,7 +434,7 @@ def main():
         text = preprocess_text(text, lower=FLAGS.uncased)
         return encode_ids(sp, text)
 
-
+    # Temporary fix for context problem. 
     PAD_TXT = """In 1991, the remains of Russian Tsar Nicholas II and his family (except for Alexei and Maria) are discovered. The voice of Nicholas's young son, Tsarevich Alexei Nikolaevich, narrates the remainder of the story. 1883 Western Siberia, a young Grigori Rasputin is asked by his father and a group of men to perform magic. Rasputin has a vision and denounces one of the men as a horse thief. Although his father initially slaps him for making such an accusation, Rasputin watches as the man is chased outside and beaten. Twenty years later, Rasputin sees a vision of the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famous, with people, even a bishop, begging for his blessing. """
     PAD_IDS = tokenize_fn(PAD_TXT)
     PAD_IDS.append(EOD_ID)
@@ -442,42 +449,50 @@ def main():
                         if eops[i-1]+1<eops[i]]
         return "\n".join(map(sp.decode_ids,sentences))
 
+    
+    
 
-    def predict(examples):
-        """Given a list of texts in examples
-        return the result"""
-        num_examples = len(examples)
-        num_batches = int(np.ceil(num_examples/FLAGS.batch_size))
-        preprocessor = get_preprocessor(examples,
+    predictions,features = prediction_graph()
+    saver = tf.train.Saver()
+    gpu_options = tf.GPUOptions(allow_growth=True)
+    model_utils.init_from_checkpoint(FLAGS, global_vars=False)
+
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
+                    gpu_options=gpu_options)) as sess:
+        sess.run(tf.global_variables_initializer())
+
+        def predict(examples):
+            """Given a list of texts in examples
+            return the result"""
+            preprocessor = get_preprocessor(examples,
                                                 tokenize_fn,PAD_IDS)
-        dataset = get_input_dataset(preprocessor)
-        example = dataset.make_one_shot_iterator().get_next()
-        predicted_tokens = prediction_graph(example)
+            dataset = get_input_dataset(preprocessor)
+            example = dataset.make_one_shot_iterator().get_next()
 
-        saver = tf.train.Saver()
-        gpu_options = tf.GPUOptions(allow_growth=True)
-        model_utils.init_from_checkpoint(FLAGS, global_vars=False)
-        outputs = []
-        confs = []
-        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
-                        gpu_options=gpu_options)) as sess:
-            sess.run(tf.global_variables_initializer())
+            num_examples = len(examples)
+            num_batches = int(np.ceil(num_examples/FLAGS.batch_size))
+            
+            outputs = []
+            confs = []
             for _ in range(num_batches):
-                output,conf = sess.run(predicted_tokens)
+                inputs = sess.run(example)
+                output,conf = sess.run(predictions,feed_dict={features[k]:v 
+                                                    for k,v in inputs.items()})
                 outputs.extend(output)
                 confs.extend(conf)
-        return outputs,confs
+            return outputs,confs
 
-    if FLAGS.interactive:
-        text = input("----PROMPT---\n")
-        outputs,confs = predict([text]*FLAGS.num_samples)
-        for i,output in enumerate(outputs):
-            print("--------SAMPLE No. {}---------\n".format(i))
-            print(parse_ids(output.tolist()))
-            if FLAGS.confidences:
-                print(confs[i])
-    else:
-        raise NotImplementedError("WIP file reading")
+        if FLAGS.interactive:
+            while True:
+                text = input("----PROMPT----\n")
+                outputs,confs = predict([text]*FLAGS.num_samples)
+                for i,output in enumerate(outputs):
+                    out = text+parse_ids(output.tolist())
+                    print("=====SAMPLE {}=====".format(i))
+                    print(out)
+                    print("===================")
+        else:
+            raise NotImplementedError("WIP file reading")
 
 
 if __name__=="__main__":
