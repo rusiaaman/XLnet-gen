@@ -3,6 +3,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import argparse
 import numpy as np
 
@@ -48,7 +49,7 @@ parser.add_argument("--init_checkpoint", default=None,
 parser.add_argument("--spiece_model_file", default="",
                     help="Sentence Piece model path.")
 parser.add_argument("--input_file", default="",
-                    help="File containing new line separated prompts "
+                    help="File containing prompts separated by empty new line "
                     "for conditional sampling")
 
 # prediction
@@ -56,7 +57,7 @@ parser.add_argument("--num_samples", default=1,
                     help="Number of samples to predict per instance", type=int)
 parser.add_argument(
     "--interactive",
-    default=True,
+    default=False,
     help="Flag for interactive prediction through command line",
     action='store_true')
 parser.add_argument(
@@ -561,7 +562,7 @@ def main():
         sentences = [toks[eops[i - 1] + 1:eops[i]]
                      for i in range(1, len(eops))
                      if eops[i - 1] + 1 < eops[i]]
-        return "\n".join(map(sp.decode_ids, sentences))
+        return "\n\n".join(map(sp.decode_ids, sentences))
 
     if FLAGS.autoregressive:
         prediction_graph = prediction_graph_memory
@@ -599,16 +600,51 @@ def main():
             return outputs, confs
 
         if FLAGS.interactive:
+            tf.logging.info("Interactive flag received."
+                            " Ignoring input files if any.")
             while True:
                 text = input("----PROMPT----\n")
                 outputs, _ = predict([text] * FLAGS.num_samples)
                 for i, output in enumerate(outputs):
                     out = parse_ids(output.tolist())
-                    print("=====SAMPLE {}=====".format(i))
+                    print("======SAMPLE {}======".format(i))
                     print(out)
-                    print("===================")
+                    print("=====================")
         else:
-            raise NotImplementedError("WIP file reading")
+            assert FLAGS.input_file!="", "Please provide either an"\
+            " input file or set interactive flag for command line input"
+            assert os.path.exists(FLAGS.input_file), FLAGS.input_file+\
+            " does not exists"
+            with open(FLAGS.input_file) as f:
+                texts = []
+                text = ""
+                for line in f:
+                    if line=="":
+                        if text!="":
+                            texts.extend([text]*FLAGS.num_samples)
+                            text=""
+                            break
+                        else:
+                            continue
+                    text+=line
+                if text!="":
+                    texts.extend([text]*FLAGS.num_samples)
+
+            tf.logging.info("Got %s lines in the input file",
+                            len(texts)//FLAGS.num_samples)
+            tf.logging.info("Sampling each line %s times",FLAGS.num_samples)
+
+            outputs, _ = predict(texts)
+            with open(os.path.join(FLAGS.input_file+".xlnet"),'w') as f:
+                for i in range(0,len(outputs),FLAGS.num_samples):
+                    f.write("\n======Example {}=================\n".format(i))
+                    f.write(texts[i])
+                    for j,output in enumerate(outputs[i:i+FLAGS.num_samples]):
+                        out = parse_ids(output.tolist())
+                        f.write("\n======Example {} SAMPLE {}======\n".format(i,j))
+                        f.write(out)
+                        f.write("\n==================================\n")
+
 
 
 if __name__ == "__main__":
