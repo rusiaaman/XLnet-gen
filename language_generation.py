@@ -7,6 +7,7 @@ import os
 import argparse
 import numpy as np
 
+from tqdm import tqdm
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
 import sentencepiece as spm
@@ -590,7 +591,7 @@ def main():
 
             outputs = []
             confs = []
-            for _ in range(num_batches):
+            for _ in tqdm(range(num_batches)):
                 inputs = sess.run(example)
                 output, conf = sess.run(
                     predictions, feed_dict={
