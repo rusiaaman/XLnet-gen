@@ -5,6 +5,7 @@ from __future__ import print_function
 from os.path import join
 import argparse
 import os
+import re
 import sys
 import csv
 import collections
@@ -28,9 +29,33 @@ import xlnet
 from classifier_utils import PaddingInputExample
 from classifier_utils import convert_single_example
 from prepro_utils import preprocess_text, encode_ids
-from modeling import _create_mask
+#from modeling import _create_mask
 
-CLS_ID = 3 #[CLS] token ID
+
+def _create_mask(qlen,mlen):
+    klen=qlen+mlen
+    return tf.zeros((qlen,klen))
+
+
+special_symbols = {
+    "<unk>"  : 0,
+    "<s>"    : 1,
+    "</s>"   : 2,
+    "<cls>"  : 3,
+    "<sep>"  : 4,
+    "<pad>"  : 5,
+    "<mask>" : 6,
+    "<eod>"  : 7,
+    "<eop>"  : 8,
+}
+
+VOCAB_SIZE = 32000
+UNK_ID = special_symbols["<unk>"]
+CLS_ID = special_symbols["<cls>"]
+SEP_ID = special_symbols["<sep>"]
+MASK_ID = special_symbols["<mask>"]
+EOD_ID = special_symbols["<eod>"]
+EOP_ID = special_symbols["<eop>"]
 
 parser = argparse.ArgumentParser()
 # Model
@@ -296,22 +321,15 @@ def prediction_graph(features):
 
     perm_mask = _create_mask(tf.shape(inp)[0],0)[:,:,None]
     # Getting the hidden states for the prompts
-    xlnet_model = xlnet.XLNetModel(
-      xlnet_config=xlnet_config,
-      run_config=run_config,
-      input_ids=inp,
-      seg_ids=seg_id,
-      input_mask=inp_mask,
-      perm_mask=perm_mask)
 
-
-    # getting memory
-    mems = xlnet_model.get_new_memory()
 
     latest_tokens = None
     prev_tokens = None
     prev_conf = None
-    batch_size = tf.shape(mems[0])[1]
+    #target mapping
+    seq_len = tf.shape(inp)[0]
+    batch_size = tf.shape(inp)[-1]
+    target_mapping = tf.concat([tf.zeros((1,seq_len-1,batch_size)),tf.ones((1,1,batch_size))],axis=1)
 
     def cond(*args):
         return True
@@ -346,7 +364,8 @@ def prediction_graph(features):
               seg_ids=seg_id,
               input_mask=inp_mask,
               perm_mask=perm_mask,
-              inp_q=input_q)
+              inp_q=input_q,
+              target_mapping=target_mapping)
 
         logits = get_logits(xlnet_model,xlnet_config)
 
@@ -411,7 +430,17 @@ def main():
 
     PAD_TXT = """In 1991, the remains of Russian Tsar Nicholas II and his family (except for Alexei and Maria) are discovered. The voice of Nicholas's young son, Tsarevich Alexei Nikolaevich, narrates the remainder of the story. 1883 Western Siberia, a young Grigori Rasputin is asked by his father and a group of men to perform magic. Rasputin has a vision and denounces one of the men as a horse thief. Although his father initially slaps him for making such an accusation, Rasputin watches as the man is chased outside and beaten. Twenty years later, Rasputin sees a vision of the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famous, with people, even a bishop, begging for his blessing. """
     PAD_IDS = tokenize_fn(PAD_TXT)
-    PAD_IDS.append(7)
+    PAD_IDS.append(EOD_ID)
+
+    def parse_ids(toks):
+        """Uses sentencepiece to conver to text. Subsitute 
+        EOP_ID with new line"""
+        eops = [i for i,t in enumerate(toks) if t==EOP_ID]
+        eops = [-1]+eops+[len(toks)]
+        sentences = [toks[eops[i-1]+1:eops[i]] 
+                        for i in range(1,len(eops))\
+                        if eops[i-1]+1<eops[i]]
+        return "\n".join(map(sp.decode_ids,sentences))
 
 
     def predict(examples):
@@ -444,7 +473,7 @@ def main():
         outputs,confs = predict([text]*FLAGS.num_samples)
         for i,output in enumerate(outputs):
             print("--------SAMPLE No. {}---------\n".format(i))
-            print(sp.decode_ids(output.tolist()))
+            print(parse_ids(output.tolist()))
             if FLAGS.confidences:
                 print(confs[i])
     else:
