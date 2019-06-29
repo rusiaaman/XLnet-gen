@@ -179,6 +179,7 @@ class XLNetModel(object):
         Only used during pretraining for two-stream attention.
         Set to None during finetuning.
     """
+    tf.logging.info("Unused args in XLNetModel {}".format(kwargs))
 
     initializer = _get_initializer(run_config)
 
@@ -218,7 +219,7 @@ class XLNetModel(object):
     tfm_args.update(input_args)
 
     with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
-      (self.output, self.new_mems, self.lookup_table
+      (self.output, self.new_mems, self.lookup_table, self.debugs
           ) = modeling.transformer_xl(**tfm_args)
 
     self.input_mask = input_mask
