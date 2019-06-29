@@ -620,14 +620,14 @@ def main():
                 texts = []
                 text = ""
                 for line in f:
-                    if line=="":
+                    if line.strip()=="":
                         if text!="":
                             texts.extend([text]*FLAGS.num_samples)
                             text=""
                             break
                         else:
                             continue
-                    text+=line
+                    text+=re.sub(r'\n','<eop>',line)
                 if text!="":
                     texts.extend([text]*FLAGS.num_samples)
 
