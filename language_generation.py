@@ -601,11 +601,14 @@ def main():
                 for _output,_conf in zip(output,conf):
                     yield _output,_conf
 
-        if FLAGS.interactive:
+        if FLAGS.unconditional or FLAGS.interactive:
             tf.logging.info("Interactive flag received."
                             " Ignoring input files if any.")
             while True:
-                text = input("----PROMPT----\n")
+                if FLAGS.unconditional:
+                    text = ""
+                else:
+                    text = input("----PROMPT----\n")
                 outputs = predict([text] * FLAGS.num_samples)
                 for i, (output,_) in enumerate(outputs):
                     out = parse_ids(output.tolist())
