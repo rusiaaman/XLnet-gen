@@ -79,8 +79,9 @@ parser.add_argument("--temperature", default=1,
                     help="Scaling factor for logits", type=int)
 parser.add_argument("--num_toks_pred", default=1024,
                     help="Number of tokens to predict", type=int)
-parser.add_argument("--confidences", default=False,
-                    help="Print confidences", action='store_true')
+parser.add_argument("--autoregressive", help="Use autoregressive approach"
+                    "for prediction. (Gives bad results but is fast)",
+                    action='store_true')
 
 FLAGS = parser.parse_args()
 
@@ -134,6 +135,7 @@ def get_input_dataset(preprocessor):
     return dataset
 
 
+
 def inputs_and_mask(latest_tokens, batch_size):
     """Computes inputs and masks for prediction loop.
     A dummy token ([CLS]) is appended at the at of the previous
@@ -160,14 +162,18 @@ def inputs_and_mask(latest_tokens, batch_size):
         seg_id = tf.tile(seg_id, [1, 2])
         input_q_0 = tf.tile([[0]], [batch_size, 1])
         input_q = tf.concat([input_q_0, input_q], axis=-1)
-
+        target_mapping = tf.tile(tf.constant(
+            [[[0], [1]]], dtype=tf.float32), [1, 1, batch_size])
         attn_masks = tf.convert_to_tensor([[0, 1], [0, 1]], dtype=tf.float32)
     else:
         attn_masks = tf.convert_to_tensor([[1]], dtype=tf.float32)
+        target_mapping = tf.tile(tf.constant(
+            [[[1]]], dtype=tf.float32), [1, 1, batch_size])
 
     attn_masks = tf.tile(attn_masks[None, :, :], [batch_size, 1, 1])
     input_q = tf.cast(input_q, tf.float32)
-    return input_k, seg_id, attn_masks, input_q
+
+    return input_k, seg_id, attn_masks, input_q, target_mapping
 
 
 def get_logits(xlnet_model, xlnet_config):
@@ -264,8 +270,141 @@ def sample_token(logits):
     return tf.reshape(samples, (batch_size, seq_len, 1)),\
         tf.reshape(confidences, (batch_size, seq_len, 1))
 
+def prediction_graph_memory():
+    """Gets features and
+    return predicted tokens)
+    features: Dict[str:tf.train.features] Contains following features:
+              input_k
+              seg_id
+              input_mask
+    """
 
-def prediction_graph():
+    features = {
+        "input_k": tf.placeholder(tf.int32, (None, None)),
+        "seg_id": tf.placeholder(tf.int32, (None, None)),
+        "input_mask": tf.placeholder(tf.float32, (None, None))
+    }
+
+    # Building prediction graph
+    # Transforming features for batch channel on last axis
+    inp = tf.transpose(features["input_k"], [1, 0])
+    seg_id = tf.transpose(features["seg_id"], [1, 0])
+    inp_mask = tf.transpose(features["input_mask"], [1, 0])
+
+    # Model config
+    xlnet_config = xlnet.XLNetConfig(json_path=FLAGS.model_config_path)
+    run_config = xlnet.create_run_config(False, True, FLAGS)
+    run_config.mem_len = FLAGS.max_mem_length
+
+    perm_mask = _create_mask(tf.shape(inp)[0], 0)[:, :, None]
+    # Getting the hidden states for the prompts
+    xlnet_model = xlnet.XLNetModel(
+        xlnet_config=xlnet_config,
+        run_config=run_config,
+        input_ids=inp,
+        seg_ids=seg_id,
+        input_mask=inp_mask,
+        perm_mask=perm_mask)
+
+    # getting memory
+    mems = xlnet_model.get_new_memory()
+
+    latest_tokens = None
+    prev_tokens = None
+    prev_confs = None
+    batch_size = tf.shape(mems[0])[1]
+
+    def cond(*_):
+        """Dummy condition since we stop based on iteration"""
+        return True
+
+    def body(mems, latest_tokens, mem_mask, prev_tokens, prev_confs):
+        """The main body of sampling loop.
+        mem: cache memory--calculated hidden states
+             of previous tokens
+        latest_tokens: latest sampled tokens
+        mem_mask: masking for setting previous memory zero. Used for padding
+        prev_tokens: all the previous tokens including latest_tokens
+        prev_confs: confidences of respective tokens in prev_tokens
+        """
+
+        # get dummy input token and permutation mask
+        input_k, seg_id, perm_mask, input_q, target_mapping = \
+            inputs_and_mask(latest_tokens,
+                            batch_size)
+
+        input_k = tf.transpose(input_k, (1, 0))
+        input_q = tf.transpose(input_q, (1, 0))
+        seg_id = tf.transpose(seg_id, (1, 0))
+        perm_mask = tf.transpose(perm_mask, (1, 2, 0))
+        # Set the hidden state of the padded tokens to be zero[
+        for i, mem in enumerate(mems):
+            mem = (1 - mem_mask[:, :, None]) * mem
+        # Get logits
+        xlnet_model = xlnet.XLNetModel(
+            xlnet_config=xlnet_config,
+            run_config=run_config,
+            input_ids=input_k,
+            seg_ids=seg_id,
+            perm_mask=perm_mask,
+            mems=mems,
+            input_mask=None,
+            inp_q=input_q,
+            target_mapping=target_mapping)
+
+        logits = get_logits(xlnet_model, xlnet_config)
+
+        # Getting new memory
+        new_mems = xlnet_model.get_new_memory()
+
+        # sample a token
+        logits = tf.transpose(logits, (1, 0, 2))
+        sampled_tokens, confs = sample_token(logits)
+        sampled_tokens = sampled_tokens[:, -1, :]  # Last token
+        confs = confs[:, -1, :]  # Last token
+        prev_tokens = sampled_tokens if prev_tokens is None \
+            else tf.concat([prev_tokens, sampled_tokens], axis=1)
+        prev_confs = confs if prev_confs is None \
+            else tf.concat([prev_confs, confs], axis=1)
+        # Cache the memory of the the last latest_tokens
+        if latest_tokens is not None:
+            merged_mems = []
+
+            for i, mem in enumerate(mems):
+                merged_mems.append(
+                    tf.concat([mem[1:], new_mems[i][:1]], axis=0))
+            mem_mask = tf.concat(
+                [mem_mask[1:], tf.zeros_like(mem_mask[:1])], axis=0)
+            return [
+                merged_mems,
+                sampled_tokens,
+                mem_mask,
+                prev_tokens,
+                prev_confs]
+
+        return [mems, sampled_tokens, mem_mask, prev_tokens, prev_confs]
+
+    mems, latest_tokens, mem_mask, prev_tokens, prev_confs = body(
+        mems, latest_tokens, inp_mask, prev_tokens, prev_confs)
+
+    args = tf.while_loop(
+        cond=cond,
+        body=body,
+        maximum_iterations=FLAGS.num_toks_pred - 1,
+        loop_vars=[mems, latest_tokens, mem_mask, prev_tokens, prev_confs],
+        shape_invariants=[
+            [tf.TensorShape([None, None, None]) for _ in range(len(mems))],
+            tf.TensorShape([None, None]),
+            tf.TensorShape([None, None]),
+            tf.TensorShape([None, None]),
+            tf.TensorShape([None, None])
+        ]
+    )
+
+    predicted_tokens, predicted_confs = args[-2:]
+    return (predicted_tokens, predicted_confs), features
+
+def prediction_graph_no_memory():
     """Builds graphs and returns prediction and input features.
     Output:
     predictions: Tuple(Tensors) Currently returns sampled tokens and confidences
@@ -423,6 +562,11 @@ def main():
                      for i in range(1, len(eops))
                      if eops[i - 1] + 1 < eops[i]]
         return "\n".join(map(sp.decode_ids, sentences))
+
+    if FLAGS.autoregressive:
+        prediction_graph = prediction_graph_memory
+    else:
+        prediction_graph = prediction_graph_no_memory
 
     predictions, features = prediction_graph()
     gpu_options = tf.GPUOptions(allow_growth=True)
