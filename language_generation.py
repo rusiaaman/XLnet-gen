@@ -61,7 +61,7 @@ parser.add_argument(
     action='store_true')
 parser.add_argument(
     "--unconditional",
-    default=True,
+    default=False,
     help="Prints samples wihtout any prompt",
     action='store_true')
 parser.add_argument(
