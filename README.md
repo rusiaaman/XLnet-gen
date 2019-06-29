@@ -24,12 +24,26 @@ Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is no
         --num_samples=1\
         --top_p=0.9
    ```
-# Notes
+# Important Notes
+## Methodology
+XLNet is a novel permutation based language model. In current implementation of XLNet-gen, we generate texts from left to right.
 
-### Sampling schemes
+XLNet pretrained models use `num_predict=85`, which means 85 tokens out of 512 in a single example are predicted. **More importantly rest of the 512-85 = 427 tokens can attend to each other in the attention mechanism which may include future tokens**. This creates problems with conventional causal attention mechanism during language generation. This leads to following problems:
+
+  * Using small context leads to gibberish predictions. Currently a hard-coded random text is included as a leading text followed by `<eod>`, the end of document token, along with the desired context. This helps with small prompts.
+  * If causal attention mask is used as is, such as with the gpt-2 or transformer-xl model, the predictions quickly start to degrade. My guess for why this happens is that during pretraining large number of tokens are among the "427" tokens which have bidirectional attention amongst themselves. Only the target tokens are attended in an autogregressive way. 
+  
+   To combat this problem, the default prediction algorithm samples a token then re-calculates all the hidden states with complete bidrectional attention among all the tokens in the sequence, and then predicts the new token. This process is repeated with the new token. 
+   
+   You can try the autogregressive approach where each new token is attended to by on the future tokens (and the self), by setting `--autogressive` flag. This is achieved by caching the hidden states in the 'memory' of transformer-xl. This also makes the prediction about 4 times faster.
+   
+
+## Sampling schemes
 - [x] top-k sampling: use `--top_k` flag, ensure `--top_p=0`
 - [x] top-p sampling: use `--top_p` flag
 - [ ] Permutation sampling
+
+
 
 # Samples
 **We’ve trained a large-scale unsupervised language model which generates coherent paragraphs of text, achieves state-of-the-art performance on many language modeling benchmarks, and performs rudimentary reading comprehension, machine translation, question answering, and summarization*** tasks in our lab using automated translation/text analysis with an automated computer system, Pro (Pro Text Analysis). From this training we have developed an automated translation tool, Pro Translation. Our system is known as the Pro Translation Suite, and is designed for translation between text, computer documents, and web pages. All of the tools in the Pro Translation Suite provide both text and "real time" translation. The program also features extensive user-friendly interfaces for user-directed development and customization of the software. The Pro Translation Suite features a number of features which offer new and innovative translation tasks. In addition, the Pro Translation Suite offers enhanced support for "realtime" translation systems, such as translation for Web pages, "real time" translation of language models, and machine translation.
