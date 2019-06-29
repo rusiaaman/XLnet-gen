@@ -1,32 +1,19 @@
+"""Generate language using XLNet"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from os.path import join
 import argparse
-import os
-import re
-import sys
-import csv
-import collections
 import numpy as np
-import time
-import math
-import json
-import random
-from copy import copy
-from collections import defaultdict as dd
 
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
 import sentencepiece as spm
 
-from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
 import model_utils
-import function_builder
+from data_utils import CLS_ID, special_symbols, EOD_ID
+
 import xlnet
-from classifier_utils import PaddingInputExample
-from classifier_utils import convert_single_example
 from prepro_utils import preprocess_text, encode_ids
 
 
@@ -34,25 +21,6 @@ def _create_mask(qlen, mlen):
     klen = qlen + mlen
     return tf.zeros((qlen, klen))
 
-
-special_symbols = {
-    "<unk>": 0,
-    "<s>": 1,
-    "</s>": 2,
-    "<cls>": 3,
-    "<sep>": 4,
-    "<pad>": 5,
-    "<mask>": 6,
-    "<eod>": 7,
-    "<eop>": 8,
-}
-
-VOCAB_SIZE = 32000
-UNK_ID = special_symbols["<unk>"]
-CLS_ID = special_symbols["<cls>"]
-SEP_ID = special_symbols["<sep>"]
-MASK_ID = special_symbols["<mask>"]
-EOD_ID = special_symbols["<eod>"]
 EOP_ID = special_symbols["<eop>"]
 
 parser = argparse.ArgumentParser()
@@ -114,39 +82,10 @@ parser.add_argument("--num_toks_pred", default=1024,
 parser.add_argument("--confidences", default=False,
                     help="Print confidences", action='store_true')
 
-# Static flags, do not change
-parser.add_argument(
-    "--use_tpu",
-    default=False,
-    help="TPU can't be used for inference. Do not set",
-    action='store_true')
-parser.add_argument(
-    "--use_bfloat16",
-    default=False,
-    help="Whether to use bfloat16. Not implemented",
-    action='store_true')
-parser.add_argument("--dropout", default=0,
-                    help="Dropout rate. Do not change.")
-parser.add_argument("--dropatt", default=0,
-                    help="Attention dropout rate. Do not change.", type=float)
-
-
-parser.add_argument("--init", default="normal",
-                    choices=["normal", "uniform"],
-                    help="Initialization method.")
-parser.add_argument("--init_std", default=0.02,
-                    help="Initialization std when init is normal.", type=float)
-parser.add_argument(
-    "--init_range",
-    default=0.1,
-    help="Initialization std when init is uniform.",
-    type=float)
-
-
 FLAGS = parser.parse_args()
 
 
-def get_preprocessor(examples, tokenize_fn, PAD_IDS):
+def get_preprocessor(examples, tokenize_fn, pad_ids):
     """
     Input:
     examples: [List[str]] input texts
@@ -155,9 +94,9 @@ def get_preprocessor(examples, tokenize_fn, PAD_IDS):
     tf input features
     """
     def generator():
-        for (ex_index, example) in enumerate(examples):
+        for example in examples:
             tokens = tokenize_fn(example)
-            yield PAD_IDS + tokens
+            yield pad_ids + tokens
 
     return generator
 
@@ -232,6 +171,7 @@ def inputs_and_mask(latest_tokens, batch_size):
 
 
 def get_logits(xlnet_model, xlnet_config):
+    """Builds the graph for calculating the final logits"""
     lookup_table = xlnet_model.get_embedding_table()
     tie_weight = True
 
@@ -260,6 +200,8 @@ def get_logits(xlnet_model, xlnet_config):
 
 
 def sampling_strategy():
+    """Based on flags return either top_k or
+    top_p strategy."""
     if FLAGS.top_p != 0:
         return 'top_p'
 
@@ -324,8 +266,9 @@ def sample_token(logits):
 
 
 def prediction_graph():
-    """Gets features and
-    return predicted tokens)
+    """Builds graphs and returns prediction and input features.
+    Output:
+    predictions: Tuple(Tensors) Currently returns sampled tokens and confidences
     features: Dict[str:tf.train.features] Contains following features:
               input_k
               seg_id
@@ -352,7 +295,6 @@ def prediction_graph():
     perm_mask = _create_mask(tf.shape(inp)[0], 0)[:, :, None]
     # Getting the hidden states for the prompts
 
-    latest_tokens = None
     prev_tokens = None
     prev_conf = None
     # target mapping
@@ -361,10 +303,12 @@ def prediction_graph():
     target_mapping = tf.concat(
         [tf.zeros((1, seq_len - 1, batch_size)), tf.ones((1, 1, batch_size))], axis=1)
 
-    def cond(*args):
+    def cond(*_):
+        """Dummy condition since we stop based on iteration"""
         return True
 
     def recalc(inp, inp_mask, seg_id, perm_mask):
+        """Augment the inputs for the new token. Appends 1 row or columns accordingly"""
         input_q = tf.zeros_like(inp, dtype=tf.float32)
         inp = tf.pad(inp, tf.convert_to_tensor(
             [[0, 1], [0, 0]]), constant_values=0)
@@ -372,29 +316,24 @@ def prediction_graph():
             [[0, 1], [0, 0]]), constant_values=0)
         seg_id = tf.pad(seg_id, tf.convert_to_tensor(
             [[0, 1], [0, 0]]), constant_values=0)
-        perm_mask = tf.concat([perm_mask, tf.ones(tf.shape(perm_mask)[
-                              0:1], dtype=tf.float32)[:, None, None]], axis=1)
-        perm_mask = tf.concat([perm_mask,
-                               tf.concat([tf.zeros(tf.shape(perm_mask)[1:2] - 1,
-                                                   dtype=tf.float32),
-                                          tf.ones([1],
-                                                  dtype=tf.float32)],
-                                         axis=0)[None,
-                                                 :,
-                                                 None]],
-                              axis=0)
+        col = tf.ones(tf.shape(perm_mask)[0:1], dtype=tf.float32)
+        perm_mask = tf.concat([perm_mask, col[:, None, None]], axis=1)
+        row = tf.concat([tf.zeros(tf.shape(perm_mask)[1:2] - 1, dtype=tf.float32),
+                         tf.ones([1], dtype=tf.float32)], axis=0)
+        perm_mask = tf.concat([perm_mask, row[None, :, None]], axis=0)
         input_q = tf.pad(input_q, tf.convert_to_tensor(
             [[0, 1], [0, 0]]), constant_values=1)
 
-        return inp[1:], inp_mask[1:], perm_mask[1:,
-                                                1:], input_q[1:], seg_id[1:]
+        return inp[1:], inp_mask[1:], perm_mask[1:, 1:], input_q[1:], seg_id[1:]
 
     def body(inp, inp_mask, seg_id, perm_mask, prev_tokens, prev_conf):
         """The main body of sampling loop.
-        mem: cache memory--calculated hidden states
-             of previous tokens
-        latest_tokens: latest sampled tokens
+        inp: input ids
+        inp_mask: input masks for paddings, etc.
+        seg_id: segment id. Zeros here.
+        perm_mask: permutation mask to pass to transformer
         prev_tokens: all the previous tokens including latest_tokens
+        prev_conf: confidences of respective tokens in prev_tokens
         """
 
         # get dummy input token and permutation mask
@@ -412,9 +351,6 @@ def prediction_graph():
             target_mapping=target_mapping)
 
         logits = get_logits(xlnet_model, xlnet_config)
-
-        # Getting new memory
-        new_mems = xlnet_model.get_new_memory()
 
         # sample a token
         logits = tf.transpose(logits, (1, 0, 2))
@@ -454,13 +390,6 @@ def prediction_graph():
 def main():
     """Main function routine"""
 
-    # Fixed flags
-    if FLAGS.use_tpu:
-        raise Exception("Inference can't run on TPU")
-    assert FLAGS.use_bfloat16 == False, "Do not change this flag"
-    assert FLAGS.dropout == 0, "Do not change this flag"
-    assert FLAGS.dropatt == 0, "Do not change this flag"
-
     tf.logging.set_verbosity(tf.logging.INFO)
 
     # Text encoding
@@ -472,9 +401,18 @@ def main():
         return encode_ids(sp, text)
 
     # Temporary fix for context problem.
-    PAD_TXT = """In 1991, the remains of Russian Tsar Nicholas II and his family (except for Alexei and Maria) are discovered. The voice of Nicholas's young son, Tsarevich Alexei Nikolaevich, narrates the remainder of the story. 1883 Western Siberia, a young Grigori Rasputin is asked by his father and a group of men to perform magic. Rasputin has a vision and denounces one of the men as a horse thief. Although his father initially slaps him for making such an accusation, Rasputin watches as the man is chased outside and beaten. Twenty years later, Rasputin sees a vision of the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famous, with people, even a bishop, begging for his blessing. """
-    PAD_IDS = tokenize_fn(PAD_TXT)
-    PAD_IDS.append(EOD_ID)
+    pad_txt = """In 1991, the remains of Russian Tsar Nicholas II and his family
+                (except for Alexei and Maria) are discovered.
+                The voice of Nicholas's young son, Tsarevich Alexei Nikolaevich, narrates the
+                remainder of the story. 1883 Western Siberia,
+                a young Grigori Rasputin is asked by his father and a group of men to perform magic.
+                Rasputin has a vision and denounces one of the men as a horse thief. Although his
+                father initially slaps him for making such an accusation, Rasputin watches as the
+                man is chased outside and beaten. Twenty years later, Rasputin sees a vision of
+                the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famous,
+                 with people, even a bishop, begging for his blessing. """
+    pad_ids = tokenize_fn(pad_txt)
+    pad_ids.append(EOD_ID)
 
     def parse_ids(toks):
         """Uses sentencepiece to conver to text. Subsitute
@@ -487,7 +425,6 @@ def main():
         return "\n".join(map(sp.decode_ids, sentences))
 
     predictions, features = prediction_graph()
-    saver = tf.train.Saver()
     gpu_options = tf.GPUOptions(allow_growth=True)
     model_utils.init_from_checkpoint(FLAGS, global_vars=False)
 
@@ -499,7 +436,7 @@ def main():
             """Given a list of texts in examples
             return the result"""
             preprocessor = get_preprocessor(examples,
-                                            tokenize_fn, PAD_IDS)
+                                            tokenize_fn, pad_ids)
             dataset = get_input_dataset(preprocessor)
             example = dataset.make_one_shot_iterator().get_next()
 
@@ -520,7 +457,7 @@ def main():
         if FLAGS.interactive:
             while True:
                 text = input("----PROMPT----\n")
-                outputs, confs = predict([text] * FLAGS.num_samples)
+                outputs, _ = predict([text] * FLAGS.num_samples)
                 for i, output in enumerate(outputs):
                     out = text + parse_ids(output.tolist())
                     print("=====SAMPLE {}=====".format(i))
@@ -531,5 +468,14 @@ def main():
 
 
 if __name__ == "__main__":
+
+    # Fixed flags
+    FLAGS.use_tpu = False
+    FLAGS.use_bfloat16 = False
+    FLAGS.dropout = 0
+    FLAGS.dropatt = 0
+    FLAGS.init = "normal"
+    FLAGS.init_std = 0.02
+    FLAGS.init_range = 0.1
     print("Args: {}".format(vars(FLAGS)))
     main()
