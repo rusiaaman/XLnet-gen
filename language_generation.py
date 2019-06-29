@@ -339,7 +339,7 @@ def prediction_graph_memory():
         perm_mask = tf.transpose(perm_mask, (1, 2, 0))
         # Set the hidden state of the padded tokens to be zero[
         for i, mem in enumerate(mems):
-            mem = (1 - mem_mask[:, :, None]) * mem
+            mems[i] = (1 - mem_mask[:, :, None]) * mems[i]
         # Get logits
         xlnet_model = xlnet.XLNetModel(
             xlnet_config=xlnet_config,
@@ -372,7 +372,7 @@ def prediction_graph_memory():
 
             for i, mem in enumerate(mems):
                 merged_mems.append(
-                    tf.concat([mem[1:], new_mems[i][:1]], axis=0))
+                    tf.concat([mems[i][1:], new_mems[i][:1]], axis=0))
             mem_mask = tf.concat(
                 [mem_mask[1:], tf.zeros_like(mem_mask[:1])], axis=0)
             return [
@@ -603,7 +603,7 @@ def main():
                 text = input("----PROMPT----\n")
                 outputs, _ = predict([text] * FLAGS.num_samples)
                 for i, output in enumerate(outputs):
-                    out = text + parse_ids(output.tolist())
+                    out = parse_ids(output.tolist())
                     print("=====SAMPLE {}=====".format(i))
                     print(out)
                     print("===================")
