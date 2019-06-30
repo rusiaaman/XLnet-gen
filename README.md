@@ -2,14 +2,16 @@
 Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is not an official implementation. Samples are included at the end of this README as well as in the `samples` folder.
 
 # Usage
-* Step 1:
+* Step 1: Download and install requirements
   ```
+  git clone https://github.com/rusiaaman/XLnet-gen.git && cd XLnet-gen
   pip install -r requirements.txt
   ```
  * Step 2:
    Download and unzip pretrained XLNet model from https://github.com/zihangdai/xlnet/
    ```
    wget https://storage.googleapis.com/xlnet/released_models/cased_L-24_H-1024_A-16.zip
+   unzip cased_L-24_H-1024_A-16.zip
    ```
  * Step 3:
    Either run in interactive mode using `--interactive` flag or pass an input file using `--input_file` argument as described later. Use `--unconditional` for generating text without any conditioned text.
@@ -72,6 +74,8 @@ There are many things that come into use in a restaurant kitchen. A dish is a co
 
 
 # Todo
-1. Comparison with GPT-2.
-2. Pinpoint the problem associated with autoregressive decoding.
-3. Permutation based decoding instead of left-to-right only.
+* [ ] Better prediction approach without leading static text. 
+* [ ] Debug the autoregressive approach which enables usage of memory. x4 times faster.
+* [ ] Comparison with GPT-2.
+* [ ] Pinpoint the problem associated with autoregressive decoding.
+* [ ] Permutation based decoding instead of left-to-right only.
