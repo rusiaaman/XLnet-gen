@@ -55,9 +55,8 @@ XLNet pretrained models use `num_predict=85`, which means 85 tokens out of 512 i
 - [ ] Permutation sampling
 
 
-
 # Samples
-**We’ve trained a large-scale unsupervised language model which generates coherent paragraphs of text, achieves state-of-the-art performance on many language modeling benchmarks, and performs rudimentary reading comprehension, machine translation, question answering, and summarization*** tasks in our lab using automated translation/text analysis with an automated computer system, Pro (Pro Text Analysis). From this training we have developed an automated translation tool, Pro Translation. Our system is known as the Pro Translation Suite, and is designed for translation between text, computer documents, and web pages. All of the tools in the Pro Translation Suite provide both text and "real time" translation. The program also features extensive user-friendly interfaces for user-directed development and customization of the software. The Pro Translation Suite features a number of features which offer new and innovative translation tasks. In addition, the Pro Translation Suite offers enhanced support for "realtime" translation systems, such as translation for Web pages, "real time" translation of language models, and machine translation.
+**We’ve trained a large-scale unsupervised language model which generates coherent paragraphs of text, achieves state-of-the-art performance on many language modeling benchmarks, and performs rudimentary reading comprehension, machine translation, question answering, and summarization** tasks in our lab using automated translation/text analysis with an automated computer system, Pro (Pro Text Analysis). From this training we have developed an automated translation tool, Pro Translation. Our system is known as the Pro Translation Suite, and is designed for translation between text, computer documents, and web pages. All of the tools in the Pro Translation Suite provide both text and "real time" translation. The program also features extensive user-friendly interfaces for user-directed development and customization of the software. The Pro Translation Suite features a number of features which offer new and innovative translation tasks. In addition, the Pro Translation Suite offers enhanced support for "realtime" translation systems, such as translation for Web pages, "real time" translation of language models, and machine translation.
 
 We currently have a highly optimized robot in the development stage and support for this robot is currently being increased to include a (possibly) real-time translation engine, "The Trans-To-Trans". The Trans-To-Trans robot has been optimized, optimized and (and perhaps) may become a real-time translation engine, " The Trans-To-Trans". As one of our main goals, we will also be testing this robot against real time translation standards and benchmarks. Additionally, this robot has been made available publicly to evaluate and use, at no cost to the public.
 
@@ -70,3 +69,9 @@ The Trans-To-Trans robot has been optimized to meet a "real time" translation re
 When the rocket arrives, you will be given a helmet, and then the rocket will launch. As you are lifting off off, keep your eyes open, and try to keep on track. It is important that you stay open and focused on the mission. If you are able to do this, then you will be able to fly away safely. Also, remember to drink water and drink fresh milk. Then, try your best to keep your body from over heating up while on the flight of your rocket.
 
 There are many things that come into use in a restaurant kitchen. A dish is a component of the cook and it serves a food in a particular form or a certain way. Other types of dishes are prepared according to the needs of the customer or the guest. There are also different types of food that comes into use in the food service company
+
+
+# Todo
+1. Comparison with GPT-2.
+2. Pinpoint the problem associated with autoregressive decoding.
+3. Permutation based decoding instead of left-to-right only.
