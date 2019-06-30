@@ -2,7 +2,7 @@
 Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is not an official implementation. Samples are included at the end of this README as well as in the `samples` folder.
 
 # Usage
-* Step 1: Download and install requirements
+* Step 1: Download and install requirements (change tensorflow to tensorflow-gpu in requirements.txt if needed)
   ```
   git clone https://github.com/rusiaaman/XLnet-gen.git && cd XLnet-gen
   pip install -r requirements.txt
