@@ -28,7 +28,7 @@ Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is no
 ## Methodology
 XLNet is a novel permutation based language model. In current implementation of XLNet-gen, we generate texts from left to right.
 
-XLNet pretrained models use `num_predict=85`, which means 85 tokens out of 512 in a single example are predicted at a time. **More importantly rest of the 512-85 = 427 tokens can attend to each other in the attention mechanism (bidrectional attention)**. This creates problems with conventional causal attention mechanism during language generation. Following problems were faced:
+XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a single example are predicted at a time. **More importantly rest of the 512-85 = 427 tokens can attend to each other in the attention mechanism (bidrectional attention)**. This creates problems with conventional causal attention mechanism during language generation. Following problems were faced:
 
   * Use of small context leads to gibberish predictions. Currently a hard-coded random text is included as a leading text followed by `<eod>`, the end of document token, along with the desired context. This helps with small prompts.
   * If causal attention mask is used as is, such as with the gpt-2 or transformer-xl model, the predictions quickly start to degrade. My guess for why this happens is that during pretraining large number of tokens are among the "427" tokens which have bidirectional attention amongst themselves. Only the target tokens are attended in an autogregressive way. 
