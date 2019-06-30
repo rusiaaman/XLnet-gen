@@ -76,8 +76,5 @@ There are many things that come into use in a restaurant kitchen. A dish is a co
 
 
 # Todo
-* [ ] Better prediction approach without leading static text. 
-* [ ] Debug the autoregressive approach which enables usage of memory. x4 times faster.
 * [ ] Comparison with GPT-2.
-* [ ] Pinpoint the problem associated with autoregressive decoding.
 * [ ] Permutation based decoding instead of left-to-right only.
