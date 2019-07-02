@@ -25,8 +25,8 @@ Colab notebook where you can give prompts:  https://colab.research.google.com/dr
         --init_checkpoint=xlnet_cased_L-24_H-1024_A-16/xlnet_model.ckpt\
         --spiece_model_file=xlnet_cased_L-24_H-1024_A-16/spiece.model\
         --interactive\
-        --max_mem_length 512\
-        --num_toks_pred=512\
+        --max_mem_length=256\
+        --num_toks_pred=256\
         --num_samples=1\
         --top_p=0.9
    ```
