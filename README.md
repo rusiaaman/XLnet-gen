@@ -3,6 +3,8 @@ Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is no
 
 Medium article as a summary of this effort: https://medium.com/@amanrusia/xlnet-speaks-comparison-to-gpt-2-ea1a4e9ba39e
 
+Colab notebook where you can give prompts:  https://colab.research.google.com/drive/12u-CmB9evMIASNOqJtDW26gmNvSgepBv
+
 # Usage
 * Step 1: Download and install requirements (change tensorflow to tensorflow-gpu in requirements.txt if needed)
   ```
