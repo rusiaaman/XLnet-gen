@@ -9,6 +9,7 @@ from absl import app
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import
 
+import math
 import numpy as np
 
 import tensorflow as tf
@@ -206,27 +207,22 @@ def get_model_fn():
     tf.logging.info("#params: {}".format(num_params))
 
     #### Configuring the optimizer
-    train_op, learning_rate, gnorm = model_utils.get_train_op(
-        FLAGS, total_loss)
-    monitor_dict["lr"] = learning_rate
-    monitor_dict["gnorm"] = gnorm
+    if is_training:
+      train_op, learning_rate, gnorm = model_utils.get_train_op(
+          FLAGS, total_loss)
+      monitor_dict["lr"] = learning_rate
+      monitor_dict["gnorm"] = gnorm
 
     #### Customized initial checkpoint
     scaffold_fn = model_utils.init_from_checkpoint(FLAGS, global_vars=True)
 
-    #### Creating host calls
-    host_call = function_builder.construct_scalar_host_call(
-        monitor_dict=monitor_dict,
-        model_dir=FLAGS.model_dir,
-        prefix="train/",
-        reduce_fn=tf.reduce_mean)
 
     if mode == tf.estimator.ModeKeys.EVAL:
       if FLAGS.use_tpu:
         with tf.colocate_with(total_loss):
           total_loss = tf.contrib.tpu.cross_replica_sum(total_loss) \
                      / FLAGS.num_hosts / FLAGS.num_core_per_host
-      metric_loss = tf.tile(tf.reshape(total_loss, [1, 1]), [batch_size, 1])
+      metric_loss = tf.tile(tf.reshape(total_loss, [1, 1]), [params["batch_size"], 1])
       eval_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
@@ -235,6 +231,13 @@ def get_model_fn():
       eval_spec.cache = new_cache
 
       return eval_spec
+
+    #### Creating host calls
+    host_call = function_builder.construct_scalar_host_call(
+        monitor_dict=monitor_dict,
+        model_dir=FLAGS.model_dir,
+        prefix="train/",
+        reduce_fn=tf.reduce_mean)
 
     #### Constucting training TPUEstimatorSpec with new cache.
     train_spec = tf.contrib.tpu.TPUEstimatorSpec(
@@ -326,7 +329,6 @@ def main(unused_argv):
     num_train_batch = train_record_info_dict["num_batch"]
     tf.logging.info("num of train batches {}".format(
                     num_train_batch))
-  
   if toeval:
     assert FLAGS.num_hosts == 1
     # Get eval input function
