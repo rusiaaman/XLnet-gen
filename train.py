@@ -166,6 +166,8 @@ flags.DEFINE_integer("start_eval_steps", default=10000,
       help="Which checkpoint to start with in `do_eval_only` mode.")
 flags.DEFINE_enum("eval_split", "valid", ["train","valid","test"],
       help="Which data split to evaluate.")
+flags.DEFINE_string("record_info_dir_eval", default=None,
+      help="Path to local directory containing `record_info-lm.json`.")
 
 
 FLAGS = flags.FLAGS
@@ -272,11 +274,14 @@ def get_cache_fn(mem_len):
 
 
 def get_input_fn(split,toeval=False,
-                 batch_size=None):
+                 batch_size=None,
+                 tfrecord_dir=None):
   """doc."""
   #assert split == "train"
   if batch_size is None: 
     batch_size = FLAGS.train_batch_size
+  if tfrecord_dir is None:
+    tfrecord_dir = FLAGS.record_info_dir
   reuse_len = FLAGS.reuse_len if not toeval else FLAGS.seq_len
   input_fn, record_info_dict = data_utils.get_input_fn(
       tfrecord_dir=FLAGS.record_info_dir,
@@ -317,6 +322,9 @@ def main(unused_argv):
   assert not toeval or (toeval and FLAGS.generative), ("Evaluation not"
         "supproted for non-generative language modelling")
 
+  if FLAGS.record_info_dir_eval is None:
+    FLAGS.record_info_dir_eval = FLAGS.record_info_dir
+
   FLAGS.n_token = data_utils.VOCAB_SIZE
   tf.logging.info("n_token {}".format(FLAGS.n_token))
 
@@ -335,7 +343,8 @@ def main(unused_argv):
     eval_input_fn, eval_record_info_dict = \
                                 get_input_fn(FLAGS.eval_split,
                                             toeval=True,
-                                            batch_size=FLAGS.eval_batch_size)
+                                            batch_size=FLAGS.eval_batch_size,
+                                            record_info_dir=FLAGS.record_info_dir_eval)
     num_eval_batch = eval_record_info_dict["num_batch"]
     if FLAGS.max_eval_batch > 0:
       num_eval_batch = min(FLAGS.max_eval_batch, num_eval_batch)
