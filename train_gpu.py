@@ -79,7 +79,7 @@ flags.DEFINE_integer("mask_beta", default=1,
       help="How many tokens to mask within each group.")
 flags.DEFINE_integer("num_predict", default=None,
       help="Number of tokens to predict in partial prediction.")
-flags.DEFINE_integer('perm_size', default=None,
+flags.DEFINE_integer('perm_size', default=0,
   help='perm size.')
 flags.DEFINE_bool("uncased", False,
       help="Use uncased inputs or not.")
@@ -138,21 +138,18 @@ flags.DEFINE_float("gen_gamma",0.5,
                   help="Scaling factor for generative masking. Lower it "
                   "for harder optimization but more bi-directionality")
 flags.DEFINE_integer("max_seeds",5,
-                  help="Maximum number of seed tokens")
-flags.DEFINE_integer("eval_batch_size", default=16,
-      help="Size of the train batch across all hosts.")
-# Evaluation
+                  help="Maximum number of seed tokens")# Evaluation
 flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
                   "This will use only generate causal masking")
 flags.DEFINE_bool("do_eval_only",False,help="Do not train only evaluate")
-flags.DEFINE_string("eval_ckpt_path", default=None,
-      help="Checkpoint path to directly evaluate on.")
 flags.DEFINE_integer("max_eval_batch", default=-1,
       help="Set -1 to turn off. Only used in test mode.")
 flags.DEFINE_integer("start_eval_steps", default=10000,
       help="Which checkpoint to start with in `do_eval_only` mode.")
 flags.DEFINE_enum("eval_split", "valid", ["train","valid","test"],
       help="Which data split to evaluate.")
+flags.DEFINE_integer("eval_batch_size", default=16,
+      help="Size of the train batch across all hosts.")
 
 FLAGS = flags.FLAGS
 
@@ -192,7 +189,8 @@ def single_core_graph(is_training, features, mems):
 
 def create_mems_tf(bsz_per_core):
   mems = [tf.placeholder(dtype=tf.float32,
-                         shape=[FLAGS.mem_len, bsz_per_core, FLAGS.d_model])
+                         shape=[FLAGS.mem_len, bsz_per_core, FLAGS.d_model],
+                         name='mems')
           for layer in range(FLAGS.n_layer)]
 
   return mems
@@ -206,15 +204,20 @@ def initialize_mems_np(bsz_per_core):
   return mems_np
 
 
-def train(ps_device):
-  ##### Get input function and model function
 
-  train_input_fn, record_info_dict = data_utils.get_input_fn(
+def get_input_fn(split,toeval=False,
+                 batch_size=None):
+  """doc."""
+  #assert split == "train"
+  if batch_size is None: 
+    batch_size = FLAGS.train_batch_size
+  reuse_len = FLAGS.reuse_len if not toeval else FLAGS.seq_len
+  input_fn, record_info_dict = data_utils.get_input_fn(
       tfrecord_dir=FLAGS.record_info_dir,
-      split="train",
-      bsz_per_host=FLAGS.train_batch_size,
+      split=split,
+      bsz_per_host=batch_size,
       seq_len=FLAGS.seq_len,
-      reuse_len=FLAGS.reuse_len,
+      reuse_len=reuse_len,
       bi_data=FLAGS.bi_data,
       num_hosts=1,
       num_core_per_host=1, # set to one no matter how many GPUs
@@ -224,20 +227,17 @@ def train(ps_device):
       uncased=FLAGS.uncased,
       num_passes=FLAGS.num_passes,
       use_bfloat16=FLAGS.use_bfloat16,
-      num_predict=FLAGS.num_predict)
+      num_predict=FLAGS.num_predict,
+      generative=FLAGS.generative,
+      gen_alpha=FLAGS.gen_alpha,
+      gen_beta=FLAGS.gen_beta,
+      gen_gamma=FLAGS.gen_gamma,
+      max_seeds=FLAGS.max_seeds,
+      toeval=toeval)
 
-  # for key, info in record_info_dict.items():
-  tf.logging.info("num of batches {}".format(record_info_dict["num_batch"]))
+  return input_fn, record_info_dict
 
-  ##### Create input tensors / placeholders
-  bsz_per_core = FLAGS.train_batch_size // FLAGS.num_core_per_host
-
-  params = {
-      "batch_size": FLAGS.train_batch_size # the whole batch
-  }
-  train_set = train_input_fn(params)
-
-  example = train_set.make_one_shot_iterator().get_next()
+def build_graph(ps_device,example,bsz_per_core):
 
   if FLAGS.num_core_per_host > 1:
     examples = [{} for _ in range(FLAGS.num_core_per_host)]
@@ -284,7 +284,6 @@ def train(ps_device):
       grads_and_vars=grads_and_vars)
   global_step = tf.train.get_global_step()
 
-  ##### Training loop
   # initialize mems
   tower_mems_np = []
   for i in range(FLAGS.num_core_per_host):
@@ -295,44 +294,152 @@ def train(ps_device):
 
   saver = tf.train.Saver()
 
-  gpu_options = tf.GPUOptions(allow_growth=True)
-
   model_utils.init_from_checkpoint(FLAGS, global_vars=True)
 
+  return [loss, tower_new_mems, global_step, gnorm, learning_rate, train_op],tower_mems,tower_mems_np,saver
+
+
+def train_step(sess, fetches, feed_dict, train_example, example_placeholder,saver):
+  input_example = sess.run(train_example)
+
+  feed_dict.update({v:input_example[k] for k,v in example_placeholder.items()})
+
+  fetched = sess.run(fetches, feed_dict=feed_dict)
+
+  loss_np, tower_mems_np, curr_step = fetched[:3]
+  total_loss += loss_np
+
+  if curr_step > 0 and curr_step % FLAGS.iterations == 0:
+    curr_loss = total_loss / (curr_step - prev_step)
+    tf.logging.info("[{}] | gnorm {:.2f} lr {:8.6f} "
+        "| loss {:.2f} | pplx {:>7.2f}, bpc {:>7.4f}".format(
+        curr_step, fetched[-3], fetched[-2],
+        curr_loss, math.exp(curr_loss), curr_loss / math.log(2)))
+    total_loss, prev_step = 0., curr_step
+
+  if curr_step > 0 and curr_step % FLAGS.save_steps == 0:
+    save_path = os.path.join(FLAGS.model_dir, "model.ckpt")
+    saver.save(sess, save_path)
+    tf.logging.info("Model saved in path: {}".format(save_path))
+
+  done = False
+  if curr_step >= FLAGS.train_steps:
+      done = True
+
+  return done,tower_mems_np
+
+def evaluate(sess, fetches, tower_mems, eval_example, example_placeholder, num_eval_batch, tower_mems_np):
+  tf.logging.info("="*40+"Evaluating"+"="*40)
+  losses = []
+  tower_mems_np_eval = tower_mems_np
+  for i in range(num_eval_batch):
+    feed_dict = {a:b for i in range(FLAGS.num_core_per_host)\
+                   for k,v in tower_mems_np_eval[i].items() \
+                   for a,b in zip(tower_mems[i][k],v)}
+
+    input_example = sess.run(eval_example)
+
+    feed_dict.update({v:input_example[k] for k,v in example_placeholder.items()})
+
+    loss_np,tower_mems_np_eval,step = sess.run(fetches[:3], feed_dict = feed_dict)
+
+    losses.append(loss_np)
+
+    tf.logging.info(f"{i}/{num_eval_batch} loss: {loss_np}")
+
+
+  tf.logging.info(f"Evaluation result for global step {step}: Avg loss {np.mean(losses)}"
+                   f"ppl {np.exp(np.mean(losses))}")
+
+def get_placeholder_example():
+  return {
+        "input_k": tf.placeholder(tf.int32, (None, None),name='input_k'),
+        "seg_id": tf.placeholder(tf.int32, (None, None),name='seg_id'),
+        "input_q": tf.placeholder(tf.float32, (None, None),name='input_q'),
+        "perm_mask": tf.placeholder(tf.float32, (None, None, None),name='perm_mask'),
+        "target_mask": tf.placeholder(tf.float32, (None, None),name='target_mask'),
+        "target": tf.placeholder(tf.int32, (None, None),name='target')
+    }
+
+def train(ps_device):
+  ##### Get input function and model function
+  toeval = FLAGS.eval or FLAGS.do_eval_only
+  assert not toeval or (toeval and FLAGS.generative), ("Evaluation not"
+        "supproted for non-generative language modelling")
+
+  if not FLAGS.do_eval_only:
+    # Get train input function
+    train_input_fn, train_record_info_dict = get_input_fn('train')
+    num_train_batch = train_record_info_dict["num_batch"]
+    tf.logging.info("num of train batches {}".format(
+                    num_train_batch))
+    
+  if toeval:
+    assert FLAGS.num_hosts == 1
+    # Get eval input function
+    eval_input_fn, eval_record_info_dict = \
+                                get_input_fn(FLAGS.eval_split,
+                                            toeval=True,
+                                            batch_size=FLAGS.eval_batch_size)
+    num_eval_batch = eval_record_info_dict["num_batch"]
+    if FLAGS.max_eval_batch > 0:
+      num_eval_batch = min(FLAGS.max_eval_batch, num_eval_batch)
+    tf.logging.info("num of eval batches {}".format(
+                    num_eval_batch))
+
+  #ToDo: handle different eval and train BS
+  bsz_per_core = FLAGS.train_batch_size // FLAGS.num_core_per_host
+
+  ##### Create input tensors / placeholders
+  if toeval:
+    
+    params = {
+        "batch_size": FLAGS.eval_batch_size # the whole batch
+    }
+    eval_set = eval_input_fn(params)
+    eval_example = eval_set.make_one_shot_iterator().get_next()
+
+  if not FLAGS.do_eval_only:
+    params = {
+        "batch_size": FLAGS.eval_batch_size # the whole batch
+    }
+    train_set = train_input_fn(params)
+    train_example = train_set.make_one_shot_iterator().get_next()
+
+  placeholder_example = get_placeholder_example()
+
+  fetches,tower_mems,tower_mems_np,saver = build_graph(ps_device,placeholder_example,bsz_per_core)
+
+  gpu_options = tf.GPUOptions(allow_growth=True)
+
+  curr_step = 0
+  tower_mems_np_train = tower_mems_np
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
     sess.run(tf.global_variables_initializer())
 
-    fetches = [loss, tower_new_mems, global_step, gnorm, learning_rate, train_op]
-
     total_loss, prev_step = 0., -1
     while True:
-      feed_dict = {}
-      for i in range(FLAGS.num_core_per_host):
-        for key in tower_mems_np[i].keys():
-          for m, m_np in zip(tower_mems[i][key], tower_mems_np[i][key]):
-            feed_dict[m] = m_np
+      if FLAGS.do_eval_only or (curr_step%num_train_batch and toeval):
+        evaluate(sess,fetches,tower_mems,eval_example,placeholder_example,num_eval_batch,tower_mems_np)
+        if FLAGS.do_eval_only:
+          break
 
-      fetched = sess.run(fetches, feed_dict=feed_dict)
+      feed_dict = {a:b for i in range(FLAGS.num_core_per_host)\
+                   for k,v in tower_mems_np_train[i].items() \
+                   for a,b in zip(tower_mems[i][k],v)}
 
-      loss_np, tower_mems_np, curr_step = fetched[:3]
-      total_loss += loss_np
+      done,tower_mems_np_train = train_step(sess,
+                                            fetches,
+                                            feed_dict,
+                                            train_example,
+                                            placeholder_example,
+                                            tower_mems_np_train,
+                                            saver)
 
-      if curr_step > 0 and curr_step % FLAGS.iterations == 0:
-        curr_loss = total_loss / (curr_step - prev_step)
-        tf.logging.info("[{}] | gnorm {:.2f} lr {:8.6f} "
-            "| loss {:.2f} | pplx {:>7.2f}, bpc {:>7.4f}".format(
-            curr_step, fetched[-3], fetched[-2],
-            curr_loss, math.exp(curr_loss), curr_loss / math.log(2)))
-        total_loss, prev_step = 0., curr_step
-
-      if curr_step > 0 and curr_step % FLAGS.save_steps == 0:
-        save_path = os.path.join(FLAGS.model_dir, "model.ckpt")
-        saver.save(sess, save_path)
-        tf.logging.info("Model saved in path: {}".format(save_path))
-
-      if curr_step >= FLAGS.train_steps:
+      if done:
         break
+      
 
 
 def main(unused_argv):
@@ -346,6 +453,8 @@ def main(unused_argv):
 
   if not tf.gfile.Exists(FLAGS.model_dir):
     tf.gfile.MakeDirs(FLAGS.model_dir)
+
+  FLAGS.eval_batch_size = FLAGS.train_batch_size #ToDo: handle different eval and train BS
 
   train("/gpu:0")
 

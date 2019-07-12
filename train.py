@@ -151,11 +151,11 @@ flags.DEFINE_float("gen_gamma",0.5,
                   "for harder optimization but more bi-directionality")
 flags.DEFINE_integer("max_seeds",5,
                   help="Maximum number of seed tokens")
-flags.DEFINE_integer("eval_batch_size", default=16,
-      help="Size of the train batch across all hosts.")
 # Evaluation
 flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
                   "This will use only generate causal masking")
+flags.DEFINE_integer("eval_batch_size", default=16,
+      help="Size of the train batch across all hosts.")
 flags.DEFINE_bool("do_eval_only",False,help="Do not train only evaluate")
 flags.DEFINE_string("eval_ckpt_path", default=None,
       help="Checkpoint path to directly evaluate on.")
