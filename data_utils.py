@@ -76,6 +76,33 @@ def format_filename(prefix, bsz_per_host, seq_len, bi_data, suffix,
   return file_name
 
 
+def format_filename_gen(prefix, bsz_per_host, seq_len, bi_data, suffix,
+                    reuse_len=None, uncased=False, toeval=False):
+  """docs."""
+  if reuse_len is None:
+    reuse_len_str = ""
+  else:
+    reuse_len_str = "reuse-{}.".format(reuse_len)
+  if not uncased:
+    uncased_str = ""
+  else:
+    uncased_str = "uncased."
+  if bi_data:
+    bi_data_str = "bi"
+  else:
+    bi_data_str = "uni"
+
+  if toeval:
+    eval_str = "-eval"
+  else:
+    eval_str = ""
+
+  file_name = "{}.bsz-{}.seqlen-{}.{}{}{}.gen{}.{}".format(
+      prefix, bsz_per_host, seq_len, reuse_len_str, uncased_str, 
+      bi_data_str, eval_str, suffix)
+
+  return file_name
+
 def _create_data(idx, input_paths):
   # Load sentence-piece model
   sp = spm.SentencePieceProcessor()
@@ -125,12 +152,16 @@ def _create_data(idx, input_paths):
 
   filenames, num_batch = [], 0
 
-  # Randomly shuffle input shards (with a fixed but distinct random seed)
-  np.random.seed(100 * FLAGS.task + FLAGS.pass_id)
+  if FLAGS.generative and FLAGS.eval:
+    perm_indices = np.arange(len(input_shards))
+  else:
+    # Randomly shuffle input shards (with a fixed but distinct random seed)
+    np.random.seed(100 * FLAGS.task + FLAGS.pass_id)
 
-  perm_indices = np.random.permutation(len(input_shards))
-  tf.logging.info("Using perm indices %s for pass %d",
-                  perm_indices.tolist(), FLAGS.pass_id)
+    perm_indices = np.random.permutation(len(input_shards))
+    tf.logging.info("Using perm indices %s for pass %d",
+                    perm_indices.tolist(), FLAGS.pass_id)
+    
 
   input_data_list, sent_ids_list = [], []
   prev_sent_id = None
@@ -177,6 +208,10 @@ def create_data(_):
   if not FLAGS.use_tpu:
     FLAGS.num_core_per_host = 1  # forced to be one
 
+  #For eval case reuse is forced to be same as 
+  if FLAGS.eval:
+    FLAGS.reuse_len = FLAGS.seq_len
+
   # Make workdirs
   if not tf.gfile.Exists(FLAGS.save_dir):
     tf.gfile.MakeDirs(FLAGS.save_dir)
@@ -201,6 +236,8 @@ def create_data(_):
         "use_eod": FLAGS.use_eod,
         "sp_path": FLAGS.sp_path,
         "input_glob": FLAGS.input_glob,
+        "generative": FLAGS.generative,
+        "eval": FLAGS.eval
     }
     corpus_info_path = os.path.join(FLAGS.save_dir, "corpus_info.json")
     with tf.gfile.Open(corpus_info_path, "w") as fp:
@@ -222,17 +259,28 @@ def create_data(_):
 
   record_prefix = "record_info-{}-{}-{}".format(
       FLAGS.split, FLAGS.task, FLAGS.pass_id)
-  record_name = format_filename(
-      prefix=record_prefix,
-      bsz_per_host=FLAGS.bsz_per_host,
-      seq_len=FLAGS.seq_len,
-      mask_alpha=FLAGS.mask_alpha,
-      mask_beta=FLAGS.mask_beta,
-      reuse_len=FLAGS.reuse_len,
-      bi_data=FLAGS.bi_data,
-      suffix="json",
-      uncased=FLAGS.uncased,
-      fixed_num_predict=FLAGS.num_predict)
+  if FLAGS.generative:
+    record_name = format_filename_gen(
+        prefix=record_prefix,
+        bsz_per_host=FLAGS.bsz_per_host,
+        seq_len=FLAGS.seq_len,
+        reuse_len=FLAGS.reuse_len,
+        bi_data=FLAGS.bi_data,
+        suffix="json",
+        uncased=FLAGS.uncased,
+        toeval=FLAGS.eval)
+  else:
+    record_name = format_filename(
+        prefix=record_prefix,
+        bsz_per_host=FLAGS.bsz_per_host,
+        seq_len=FLAGS.seq_len,
+        mask_alpha=FLAGS.mask_alpha,
+        mask_beta=FLAGS.mask_beta,
+        reuse_len=FLAGS.reuse_len,
+        bi_data=FLAGS.bi_data,
+        suffix="json",
+        uncased=FLAGS.uncased,
+        fixed_num_predict=FLAGS.num_predict)
   record_info_path = os.path.join(tfrecord_dir, record_name)
 
   with tf.gfile.Open(record_info_path, "w") as fp:
@@ -418,18 +466,30 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
 
   tf.logging.info("Raw data shape %s.", data.shape)
 
-  file_name = format_filename(
-      prefix=basename,
-      bsz_per_host=bsz_per_host,
-      seq_len=seq_len,
-      bi_data=bi_data,
-      suffix="tfrecords",
-      mask_alpha=FLAGS.mask_alpha,
-      mask_beta=FLAGS.mask_beta,
-      reuse_len=FLAGS.reuse_len,
-      uncased=FLAGS.uncased,
-      fixed_num_predict=FLAGS.num_predict
-  )
+  if not FLAGS.generative:
+    file_name = format_filename(
+        prefix=basename,
+        bsz_per_host=bsz_per_host,
+        seq_len=seq_len,
+        bi_data=bi_data,
+        suffix="tfrecords",
+        mask_alpha=FLAGS.mask_alpha,
+        mask_beta=FLAGS.mask_beta,
+        reuse_len=FLAGS.reuse_len,
+        uncased=FLAGS.uncased,
+        fixed_num_predict=FLAGS.num_predict
+    )
+  else:
+    file_name = format_filename_gen(
+        prefix=basename,
+        bsz_per_host=bsz_per_host,
+        seq_len=seq_len,
+        bi_data=bi_data,
+        suffix="tfrecords",
+        reuse_len=FLAGS.reuse_len,
+        uncased=FLAGS.uncased,
+        toeval=FLAGS.eval)
+
   save_path = os.path.join(save_dir, file_name)
   record_writer = tf.python_io.TFRecordWriter(save_path)
   tf.logging.info("Start writing %s.", save_path)
@@ -437,8 +497,9 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
   num_batch = 0
   reuse_len = FLAGS.reuse_len
 
-  # [sep] x 2 + [cls]
-  assert reuse_len < seq_len - 3
+  if not FLAGS.eval:
+    # [sep] x 2 + [cls]
+    assert reuse_len < seq_len - 3
 
   data_len = data.shape[1]
   sep_array = np.array([SEP_ID], dtype=np.int64)
@@ -452,51 +513,63 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
     all_ok = True
     features = []
     for idx in range(bsz_per_host):
-      inp = data[idx, i: i + reuse_len]
-      tgt = data[idx, i + 1: i + reuse_len + 1]
-
-      results = _split_a_and_b(
-          data[idx],
-          sent_ids[idx],
-          begin_idx=i + reuse_len,
-          tot_len=seq_len - reuse_len - 3,
-          extend_target=True)
-      if results is None:
-        tf.logging.info("Break out with seq idx %d", i)
-        all_ok = False
-        break
-
-      # unpack the results
-      (a_data, b_data, label, _, a_target, b_target) = tuple(results)
-
-      # sample ngram spans to predict
-      reverse = bi_data and (idx // (bsz_per_core // 2)) % 2 == 1
-      if FLAGS.num_predict is None:
-        num_predict_0 = num_predict_1 = None
+      if FLAGS.generative and FLAGS.eval:
+        cat_data = data[idx,i: i+seq_len]
+        tgt = data[idx,i+1: i+seq_len+1]
+        is_masked = np.ones(seq_len,dtype=np.int64)
+        label = 0
+        seg_id = [0]*seq_len
       else:
-        num_predict_1 = FLAGS.num_predict // 2
-        num_predict_0 = FLAGS.num_predict - num_predict_1
-      mask_0 = _sample_mask(sp, inp, reverse=reverse,
-                            goal_num_predict=num_predict_0)
-      mask_1 = _sample_mask(sp, np.concatenate([a_data, sep_array, b_data,
-                                                sep_array, cls_array]),
-                            reverse=reverse, goal_num_predict=num_predict_1)
+        inp = data[idx, i: i + reuse_len]
+        tgt = data[idx, i + 1: i + reuse_len + 1]
 
-      # concatenate data
-      cat_data = np.concatenate([inp, a_data, sep_array, b_data,
-                                 sep_array, cls_array])
-      seg_id = ([0] * (reuse_len + a_data.shape[0]) + [0] +
-                [1] * b_data.shape[0] + [1] + [2])
-      assert cat_data.shape[0] == seq_len
-      assert mask_0.shape[0] == seq_len // 2
-      assert mask_1.shape[0] == seq_len // 2
+        results = _split_a_and_b(
+            data[idx],
+            sent_ids[idx],
+            begin_idx=i + reuse_len,
+            tot_len=seq_len - reuse_len - 3,
+            extend_target=True)
+        if results is None:
+          tf.logging.info("Break out with seq idx %d", i)
+          all_ok = False
+          break
 
-      # the last two CLS's are not used, just for padding purposes
-      tgt = np.concatenate([tgt, a_target, b_target, cls_array, cls_array])
-      assert tgt.shape[0] == seq_len
+        # unpack the results
+        (a_data, b_data, label, _, a_target, b_target) = tuple(results)
 
-      is_masked = np.concatenate([mask_0, mask_1], 0)
-      if FLAGS.num_predict is not None:
+        if not FLAGS.generative:
+          # sample ngram spans to predict
+          reverse = bi_data and (idx // (bsz_per_core // 2)) % 2 == 1
+          if FLAGS.num_predict is None:
+            num_predict_0 = num_predict_1 = None
+          else:
+            num_predict_1 = FLAGS.num_predict // 2
+            num_predict_0 = FLAGS.num_predict - num_predict_1
+          mask_0 = _sample_mask(sp, inp, reverse=reverse,
+                                goal_num_predict=num_predict_0)
+          mask_1 = _sample_mask(sp, np.concatenate([a_data, sep_array, b_data,
+                                                    sep_array, cls_array]),
+                                reverse=reverse, goal_num_predict=num_predict_1)
+
+          assert mask_0.shape[0] == seq_len // 2
+          assert mask_1.shape[0] == seq_len // 2
+          is_masked = np.concatenate([mask_0, mask_1], 0)
+        else:
+          is_masked = np.ones(seq_len,dtype=np.int64)
+
+        # concatenate data
+        cat_data = np.concatenate([inp, a_data, sep_array, b_data,
+                                   sep_array, cls_array])
+        seg_id = ([0] * (reuse_len + a_data.shape[0]) + [0] +
+                  [1] * b_data.shape[0] + [1] + [2])
+        assert cat_data.shape[0] == seq_len
+
+        # the last two CLS's are not used, just for padding purposes
+        tgt = np.concatenate([tgt, a_target, b_target, cls_array, cls_array])
+
+      assert tgt.shape[0] == seq_len, f"{tgt.shape},{seq_len}"
+
+      if FLAGS.num_predict is not None and not FLAGS.generative:
         assert np.sum(is_masked) == FLAGS.num_predict
 
       feature = {
@@ -543,7 +616,8 @@ def _convert_example(example, use_bfloat16):
 
 
 def parse_files_to_dataset(parser, file_names, split, num_batch, num_hosts,
-                           host_id, num_core_per_host, bsz_per_core):
+                           host_id, num_core_per_host, bsz_per_core, 
+                           toeval=False):
   # list of file pathes
   num_files = len(file_names)
   num_files_per_host = num_files // num_hosts
@@ -554,11 +628,11 @@ def parse_files_to_dataset(parser, file_names, split, num_batch, num_hosts,
   file_paths = file_names[my_start_file_id: my_end_file_id]
   tf.logging.info("Host %d handles %d files", host_id, len(file_paths))
 
-  assert split == "train"
+  #assert split == "train"
   dataset = tf.data.Dataset.from_tensor_slices(file_paths)
 
   # file-level shuffle
-  if len(file_paths) > 1:
+  if len(file_paths) > 1 and not toeval:
     dataset = dataset.shuffle(len(file_paths))
 
   # Note: we cannot perform sample-level shuffle here because this will violate
@@ -569,11 +643,173 @@ def parse_files_to_dataset(parser, file_names, split, num_batch, num_hosts,
   # the same input at each time will be different. Thus, cache processed data
   # is not helpful. It will use a lot of memory and lead to contrainer OOM.
   # So, change to cache non-parsed raw data instead.
-  dataset = dataset.cache().map(parser).repeat()
+  dataset = dataset.cache().map(parser)
+  if not toeval:
+    dataset = dataset.repeat()
   dataset = dataset.batch(bsz_per_core, drop_remainder=True)
   dataset = dataset.prefetch(num_core_per_host * bsz_per_core)
 
   return dataset
+
+def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
+                     alpha, beta, gamma, max_seeds):
+  """
+  Sample a permutation of the factorization order restricting the 
+  tokens around other generated tokens.
+  Inputs:
+    inputs: int64 Tensor in shape [seq_len], input ids.
+    targets: int64 Tensor in shape [seq_len], target ids.
+    is_masked: Not used. For back compaitibilty. It is assumed all non-functional
+             tokens are to be predicted
+    perm_size: Not used. For back compatibility. It is assumed inputs
+              are already restricted to prevent data leakage.
+    seq_len: int, sequence length.
+    alpha: (int) context length to look at while deciding probability
+            of generation
+    beta: (int) Do not sample a token if the number of context tokens around
+          a token are below this
+    gamma: (float) Scaling factor. Increase it to sample tokens in groups,
+          decrease to spread out with more missing tokens in between two
+    max_seeds: Sample these many random tokens initially
+  """
+  def context_len(seq,alpha):
+    """Given a binary tensor (float32) where 
+    1 represents token already observed, returns
+    number of context tokens for each unobserved token
+    Inputs:
+    seq: tf.tensor of type int32 or float32 with 1s and 0s. shape: (seq_len)
+    alpha: context length integer
+    Outputs:
+    context_len: tf.float32 tensor of same shape as seq"""
+    seq = tf.cast(seq,tf.float32)
+    cont = tf.nn.conv1d(tf.reshape(seq,(1,-1,1)),tf.reshape(tf.ones(alpha,dtype=tf.float32),(-1,1,1)),padding='SAME',stride=1)
+    cont = cont[0,:,0]
+    return cont*(1-seq)
+  def update_probs(seq,alpha,beta,gamma):
+    """Given a binary tensor (float32) where 
+    1 represents token already observed, calculate
+    the probabilities of the remaining tokens
+    Inputs:
+    seq: tf.tensor of type int32 or float32 with 1s and 0s. shape: (seq_len)
+    alpha: context length integer
+    beta: integer minimum context length for token to assign probability
+    gamma: scale factor to control probability peak around context
+    Outputs:
+    probability: 1d tensor of probabilities"""
+    seq_cont_len = tf.cast(context_len(seq,alpha),dtype=tf.float32)
+    probs = tf.where(tf.greater_equal(seq_cont_len,beta),seq_cont_len**gamma,tf.zeros_like(seq_cont_len))
+    return probs/(tf.reduce_sum(probs)+1e-8)
+  def random_choice(batch_shape,sample):
+    """Generate random samples without replacement.
+
+    This would be roughly equivalent to:
+
+      numpy.random.choice(domain, sample, replace=False)
+
+    but also supports generating batches of samples.
+    """
+    p = tf.random_uniform(batch_shape, 0, 1)
+    _, indices = tf.nn.top_k(p, sample)
+    return indices
+  def generate_random_seq(seq_len,alpha,beta,gamma,max_seeds = 3): 
+    seq = tf.zeros(seq_len,dtype=tf.int32) 
+    probs = tf.ones(seq_len)
+    tokens = None
+    def body(tokens,seq):
+        if tokens is None:
+            tokens = tf.ones(seq_len,dtype=tf.int32)*-1
+            num_seeds = tf.random.uniform((1,),maxval=max_seeds,dtype=tf.int32)[0]+1
+            seeds = random_choice(tf.shape(seq)[0:1],num_seeds)
+            seed_onehot =  tf.one_hot(seeds,dtype=tf.int32,depth=tf.shape(seq)[0])
+            seq = tf.cast(tf.reduce_sum(seed_onehot,axis=0)>0,dtype=tf.int32)
+            tokens = seeds
+        probs = update_probs(seq,alpha,beta,gamma)
+        probs = probs+1e-10
+        tok = tf.random.categorical(tf.log(tf.reshape(probs,(1,-1))/tf.reduce_sum(probs)),num_samples=1,dtype=tf.int32)[0]
+        tokens = tf.concat([tokens,tok],axis=-1)
+        seq = tf.concat([seq[:tok[0]],[1],seq[tok[0]+1:]],axis=0)
+        return tokens,seq
+    def cond(tokens,seq):
+        return tf.not_equal(tf.shape(tokens)[0],seq_len)
+    tokens,seq = body(tokens,seq)
+    tokens,seq = tf.while_loop(cond,body,(tokens,seq))
+    return tokens
+
+  index = generate_random_seq(seq_len,alpha,beta,gamma,max_seeds)
+
+  # non-functional tokens
+  func_tokens = tf.logical_or(tf.equal(inputs, SEP_ID),
+                              tf.equal(inputs, CLS_ID))
+  non_func_tokens = tf.logical_not(func_tokens)
+
+  target_mask = tf.cast(non_func_tokens,dtype=tf.float32)
+
+  # SEP_ID and CLS_ID can attend to all but themseleves
+  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index)
+
+  perm_mask = perm_mask[:, None] <= perm_mask[None, :]
+  perm_mask = tf.cast(perm_mask, tf.float32)
+
+
+  # new target: [next token] for LM and [curr token] (self) for PLM
+  new_targets = tf.concat([inputs[0: 1], targets[: -1]],
+                          axis=0)
+
+  # construct inputs_k
+  inputs_k = inputs
+
+  # construct inputs_q
+  inputs_q = target_mask
+
+  return perm_mask, new_targets, target_mask, inputs_k, inputs_q
+
+
+
+def _causal_seq(inputs, targets, is_masked, perm_size, seq_len):
+  """
+  Causal mask no permutation.
+  Inputs:
+    inputs: int64 Tensor in shape [seq_len], input ids.
+    targets: int64 Tensor in shape [seq_len], target ids.
+    is_masked: Not used. For back compaitibilty. It is assumed all non-functional
+             tokens are to be predicted
+    perm_size: Not used. For back compatibility. It is assumed inputs
+              are already restricted to prevent data leakage.
+    seq_len: int, sequence length.
+    alpha: (int) context length to look at while deciding probability
+            of generation
+    beta: (int) Do not sample a token if the number of context tokens around
+          a token are below this
+    gamma: (float) Scaling factor. Increase it to sample tokens in groups,
+          decrease to spread out with more missing tokens in between two
+    max_seeds: Sample these many random tokens initially
+  """
+
+  # non-functional tokens
+  func_tokens = tf.logical_or(tf.equal(inputs, SEP_ID),
+                              tf.equal(inputs, CLS_ID))
+  non_func_tokens = tf.logical_not(func_tokens)
+
+  target_mask = tf.cast(non_func_tokens,dtype=tf.float32)
+
+  # SEP_ID and CLS_ID can attend to all but themseleves
+  index = tf.range(seq_len)
+  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index)
+
+  perm_mask = perm_mask[:, None] <= perm_mask[None, :]
+  perm_mask = tf.cast(perm_mask, tf.float32)
+
+  # new target: [next token] for LM and [curr token] (self) for PLM
+  new_targets = tf.concat([inputs[0: 1], targets[: -1]],
+                          axis=0)
+
+  # construct inputs_k
+  inputs_k = inputs
+
+  # construct inputs_q
+  inputs_q = target_mask
+
+  return perm_mask, new_targets, target_mask, inputs_k, inputs_q
 
 
 def _local_perm(inputs, targets, is_masked, perm_size, seq_len):
@@ -645,7 +881,9 @@ def _local_perm(inputs, targets, is_masked, perm_size, seq_len):
 
 def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
                 num_batch, seq_len, reuse_len, perm_size, mask_alpha,
-                mask_beta, use_bfloat16=False, num_predict=None):
+                mask_beta, use_bfloat16=False, num_predict=None,
+                generative=False,gen_alpha=7,gen_beta=1,gen_gamma=0.5,
+                max_seeds=5,toeval=False):
 
   bsz_per_core = params["batch_size"]
   if num_hosts > 1:
@@ -653,10 +891,13 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
   else:
     host_id = 0
 
+  # Force num_predict to be seq_len for generative case
+  if generative:
+    num_predict = seq_len
+
     #### Function used to parse tfrecord
   def parser(record):
     """function used to parse tfrecord."""
-
     record_spec = {
         "input": tf.FixedLenFeature([seq_len], tf.int64),
         "target": tf.FixedLenFeature([seq_len], tf.int64),
@@ -677,14 +918,16 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
     non_reuse_len = seq_len - reuse_len
     assert perm_size <= reuse_len and perm_size <= non_reuse_len
 
-    perm_mask_0, target_0, target_mask_0, input_k_0, input_q_0 = _local_perm(
+    perm_fn = _local_perm if not generative else _generative_perm if not toeval\
+              else _causal_seq
+    perm_mask_0, target_0, target_mask_0, input_k_0, input_q_0 = perm_fn(
         inputs[:reuse_len],
         target[:reuse_len],
         is_masked[:reuse_len],
         perm_size,
         reuse_len)
 
-    perm_mask_1, target_1, target_mask_1, input_k_1, input_q_1 = _local_perm(
+    perm_mask_1, target_1, target_mask_1, input_k_1, input_q_1 = perm_fn(
         inputs[reuse_len:],
         target[reuse_len:],
         is_masked[reuse_len:],
@@ -754,7 +997,8 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
       num_hosts=num_hosts,
       host_id=host_id,
       num_core_per_host=num_core_per_host,
-      bsz_per_core=bsz_per_core)
+      bsz_per_core=bsz_per_core,
+      toeval=toeval)
 
   return dataset
 
@@ -774,20 +1018,38 @@ def get_input_fn(
     uncased=False,
     num_passes=None,
     use_bfloat16=False,
-    num_predict=None):
-
-  # Merge all record infos into a single one
-  record_glob_base = format_filename(
-      prefix="record_info-{}-*".format(split),
-      bsz_per_host=bsz_per_host,
-      seq_len=seq_len,
-      bi_data=bi_data,
-      suffix="json",
-      mask_alpha=mask_alpha,
-      mask_beta=mask_beta,
-      reuse_len=reuse_len,
-      uncased=uncased,
-      fixed_num_predict=num_predict)
+    num_predict=None,
+    generative=False,
+    gen_alpha=None,
+    gen_beta=None,
+    gen_gamma=None,
+    max_seeds=None,
+    toeval=False):
+  
+  if generative:
+    # Merge all record infos into a single one
+    record_glob_base = format_filename_gen(
+        prefix="record_info-{}-*".format(split),
+        bsz_per_host=bsz_per_host,
+        seq_len=seq_len,
+        bi_data=bi_data,
+        suffix="json",
+        reuse_len=reuse_len,
+        uncased=uncased,
+        toeval=toeval)
+  else:
+    # Merge all record infos into a single one
+    record_glob_base = format_filename(
+        prefix="record_info-{}-*".format(split),
+        bsz_per_host=bsz_per_host,
+        seq_len=seq_len,
+        bi_data=bi_data,
+        suffix="json",
+        mask_alpha=mask_alpha,
+        mask_beta=mask_beta,
+        reuse_len=reuse_len,
+        uncased=uncased,
+        fixed_num_predict=num_predict)
 
   record_info = {"num_batch": 0, "filenames": []}
 
@@ -865,7 +1127,13 @@ def get_input_fn(
         mask_alpha=mask_alpha,
         mask_beta=mask_beta,
         use_bfloat16=use_bfloat16,
-        num_predict=num_predict)
+        num_predict=num_predict,
+        generative=generative,
+        gen_alpha=gen_alpha,
+        gen_beta=gen_beta,
+        gen_gamma=gen_gamma,
+        max_seeds=max_seeds,
+        toeval=toeval)
 
     return dataset
 
@@ -883,7 +1151,7 @@ if __name__ == "__main__":
   flags.DEFINE_integer("reuse_len", 256,
                        help="Number of token that can be reused as memory. "
                        "Could be half of `seq_len`.")
-  flags.DEFINE_bool("uncased", True, help="Use uncased inputs or not.")
+  flags.DEFINE_bool("uncased", False, help="Use uncased inputs or not.")
   flags.DEFINE_bool("bi_data", True,
                     help="whether to create bidirectional data")
   flags.DEFINE_integer("mask_alpha", default=6,
@@ -904,12 +1172,17 @@ if __name__ == "__main__":
                       help="Directory for saving the processed data.")
   flags.DEFINE_enum("split", "train", ["train", "dev", "test"],
                     help="Save the data as which split.")
-
   flags.DEFINE_integer("pass_id", 0, help="ID of the current pass."
                        "Different passes sample different negative segment.")
   flags.DEFINE_integer("num_task", 1, help="Number of total tasks.")
   flags.DEFINE_integer("task", 0, help="The Task ID. This value is used when "
                        "using multiple workers to identify each worker.")
+  # For generative lm
+  flags.DEFINE_bool("generative",False,
+                    help="Whether to use generative language modelling.")
+  # For evaluation
+  flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
+                    "This will use only generate causal masking")
 
   tf.logging.set_verbosity(tf.logging.INFO)
   tf.app.run(create_data)
