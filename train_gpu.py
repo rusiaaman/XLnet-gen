@@ -165,10 +165,13 @@ def get_model_fn():
     tf.logging.info('#params: {}'.format(num_params))
 
     # GPU
-    assert is_training
-    all_vars = tf.trainable_variables()
-    grads = tf.gradients(total_loss, all_vars)
-    grads_and_vars = list(zip(grads, all_vars))
+    #assert is_training
+    if is_training:
+      all_vars = tf.trainable_variables()
+      grads = tf.gradients(total_loss, all_vars)
+      grads_and_vars = list(zip(grads, all_vars))
+    else:
+      grads_and_vars = None
 
     return total_loss, new_mems, grads_and_vars
 
@@ -237,7 +240,7 @@ def get_input_fn(split,toeval=False,
 
   return input_fn, record_info_dict
 
-def build_graph(ps_device,example,bsz_per_core):
+def build_graph(ps_device,example,bsz_per_core,is_training):
 
   if FLAGS.num_core_per_host > 1:
     examples = [{} for _ in range(FLAGS.num_core_per_host)]
@@ -262,7 +265,7 @@ def build_graph(ps_device,example,bsz_per_core):
         mems_i["mems"] = create_mems_tf(bsz_per_core)
 
       loss_i, new_mems_i, grads_and_vars_i = single_core_graph(
-          is_training=True,
+          is_training=is_training,
           features=examples[i],
           mems=mems_i)
 
@@ -274,14 +277,17 @@ def build_graph(ps_device,example,bsz_per_core):
   ## average losses and gradients across towers
   if len(tower_losses) > 1:
     loss = tf.add_n(tower_losses) / len(tower_losses)
-    grads_and_vars = average_grads_and_vars(tower_grads_and_vars)
+    if is_training:
+      grads_and_vars = average_grads_and_vars(tower_grads_and_vars)
   else:
     loss = tower_losses[0]
-    grads_and_vars = tower_grads_and_vars[0]
+    if is_training:
+      grads_and_vars = tower_grads_and_vars[0]
 
   ## get train op
-  train_op, learning_rate, gnorm = model_utils.get_train_op(FLAGS, None,
-      grads_and_vars=grads_and_vars)
+  if is_training:
+    train_op, learning_rate, gnorm = model_utils.get_train_op(FLAGS, None,
+        grads_and_vars=grads_and_vars)
   global_step = tf.train.get_global_step()
 
   # initialize mems
@@ -295,11 +301,15 @@ def build_graph(ps_device,example,bsz_per_core):
   saver = tf.train.Saver()
 
   model_utils.init_from_checkpoint(FLAGS, global_vars=True)
+  if is_training:
+    fetches = [loss, tower_new_mems, global_step, gnorm, learning_rate, train_op]
+  else:
+    fetches = [loss, tower_new_mems]
+  return fetches,tower_mems,tower_mems_np,saver
 
-  return [loss, tower_new_mems, global_step, gnorm, learning_rate, train_op],tower_mems,tower_mems_np,saver
 
-
-def train_step(sess, fetches, feed_dict, train_example, example_placeholder,saver):
+def train_step(sess, fetches, feed_dict, train_example, example_placeholder,saver,
+               total_loss, prev_step):
   input_example = sess.run(train_example)
 
   feed_dict.update({v:input_example[k] for k,v in example_placeholder.items()})
@@ -326,7 +336,7 @@ def train_step(sess, fetches, feed_dict, train_example, example_placeholder,save
   if curr_step >= FLAGS.train_steps:
       done = True
 
-  return done,tower_mems_np
+  return done, tower_mems_np, total_loss, prev_step, curr_step
 
 def evaluate(sess, fetches, tower_mems, eval_example, example_placeholder, num_eval_batch, tower_mems_np):
   tf.logging.info("="*40+"Evaluating"+"="*40)
@@ -341,14 +351,14 @@ def evaluate(sess, fetches, tower_mems, eval_example, example_placeholder, num_e
 
     feed_dict.update({v:input_example[k] for k,v in example_placeholder.items()})
 
-    loss_np,tower_mems_np_eval,step = sess.run(fetches[:3], feed_dict = feed_dict)
+    loss_np,tower_mems_np_eval = sess.run(fetches[:2], feed_dict = feed_dict)
 
     losses.append(loss_np)
 
     tf.logging.info(f"{i}/{num_eval_batch} loss: {loss_np}")
 
 
-  tf.logging.info(f"Evaluation result for global step {step}: Avg loss {np.mean(losses)}"
+  tf.logging.info(f"Evaluation result Avg loss {np.mean(losses)}"
                    f"ppl {np.exp(np.mean(losses))}")
 
 def get_placeholder_example():
@@ -391,6 +401,7 @@ def train(ps_device):
   bsz_per_core = FLAGS.train_batch_size // FLAGS.num_core_per_host
 
   ##### Create input tensors / placeholders
+  placeholder_example = get_placeholder_example()
   if toeval:
     
     params = {
@@ -398,6 +409,8 @@ def train(ps_device):
     }
     eval_set = eval_input_fn(params)
     eval_example = eval_set.make_one_shot_iterator().get_next()
+    fetches_e,tower_mems_e,tower_mems_np_e,_ = \
+            build_graph(ps_device,placeholder_example,bsz_per_core,False)
 
   if not FLAGS.do_eval_only:
     params = {
@@ -405,15 +418,16 @@ def train(ps_device):
     }
     train_set = train_input_fn(params)
     train_example = train_set.make_one_shot_iterator().get_next()
+    fetches,tower_mems,tower_mems_np_train,saver = \
+            build_graph(ps_device,placeholder_example,bsz_per_core,True)
 
-  placeholder_example = get_placeholder_example()
 
-  fetches,tower_mems,tower_mems_np,saver = build_graph(ps_device,placeholder_example,bsz_per_core)
+  
 
   gpu_options = tf.GPUOptions(allow_growth=True)
 
   curr_step = 0
-  tower_mems_np_train = tower_mems_np
+
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
     sess.run(tf.global_variables_initializer())
@@ -421,7 +435,7 @@ def train(ps_device):
     total_loss, prev_step = 0., -1
     while True:
       if FLAGS.do_eval_only or (curr_step%num_train_batch and toeval):
-        evaluate(sess,fetches,tower_mems,eval_example,placeholder_example,num_eval_batch,tower_mems_np)
+        evaluate(sess,fetches_e,tower_mems_e,eval_example,placeholder_example,num_eval_batch,tower_mems_np_e)
         if FLAGS.do_eval_only:
           break
 
@@ -429,13 +443,16 @@ def train(ps_device):
                    for k,v in tower_mems_np_train[i].items() \
                    for a,b in zip(tower_mems[i][k],v)}
 
-      done,tower_mems_np_train = train_step(sess,
+      done,tower_mems_np_train, total_loss, prev_step, curr_step\
+                                train_step(sess,
                                             fetches,
                                             feed_dict,
                                             train_example,
                                             placeholder_example,
                                             tower_mems_np_train,
-                                            saver)
+                                            saver,
+                                            total_loss,
+                                            prev_step)
 
       if done:
         break
