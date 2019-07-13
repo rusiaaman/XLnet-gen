@@ -310,14 +310,22 @@ def build_graph(ps_device,example,bsz_per_core,is_training):
 
 def train_step(sess, fetches, feed_dict, train_example, example_placeholder,saver,
                total_loss, prev_step):
+  
+  data_start = time.time()
+
   input_example = sess.run(train_example)
+
+  data_end = time.time()
 
   feed_dict.update({v:input_example[k] for k,v in example_placeholder.items()})
 
   fetched = sess.run(fetches, feed_dict=feed_dict)
 
+  train_end = time.time()
+
   loss_np, tower_mems_np, curr_step = fetched[:3]
   total_loss += loss_np
+
 
   if curr_step > 0 and curr_step % FLAGS.iterations == 0:
     curr_loss = total_loss / (curr_step - prev_step)
@@ -443,13 +451,12 @@ def train(ps_device):
                    for k,v in tower_mems_np_train[i].items() \
                    for a,b in zip(tower_mems[i][k],v)}
 
-      done,tower_mems_np_train, total_loss, prev_step, curr_step\
+      done,tower_mems_np_train, total_loss, prev_step, curr_step=\
                                 train_step(sess,
                                             fetches,
                                             feed_dict,
                                             train_example,
                                             placeholder_example,
-                                            tower_mems_np_train,
                                             saver,
                                             total_loss,
                                             prev_step)

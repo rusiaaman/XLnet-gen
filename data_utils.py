@@ -41,6 +41,29 @@ SEP_ID = special_symbols["<sep>"]
 MASK_ID = special_symbols["<mask>"]
 EOD_ID = special_symbols["<eod>"]
 
+def get_valid_shape(inp_size,filter_size,stride):
+    return (inp_size-filter_size)//stride+1
+def pad_inp(inp,filt,stride,const=0):
+    pads = inp.shape[0]-get_valid_shape(inp.shape[0],filt.shape[0],stride)
+    pad_l = pads//2
+    pad_r = pads-pad_l
+    return tf.pad(inp,([pad_l,pad_r],),constant_values=const)
+def get_indices(inp_size,filter_size,stride):
+    indices = tf.tile(tf.range(filter_size)[None],multiples=(inp_size,1)) +\
+                    tf.range(0,limit=inp_size*stride,delta=stride)[:,None]
+    till = get_valid_shape(inp_size,filter_size,stride)
+    return indices[:till]
+def conv1d(inputs,filt,stride):
+    """Same padding conv1d.
+    inputs: 1d tensor for input
+    filt: 1d tensor for filter"""
+    newinp = pad_inp(inputs,filt,stride)
+    indices = get_indices(tf.shape(newinp)[0],tf.shape(filt)[0],stride)
+    newinp = tf.gather(newinp,indices)
+    filt = tf.cast(filt,tf.float32)
+    newinp = tf.cast(newinp,tf.float32)
+    return tf.reduce_sum(filt[None]*newinp,axis=-1)
+
 
 def _int64_feature(values):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
@@ -684,8 +707,7 @@ def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
     Outputs:
     context_len: tf.float32 tensor of same shape as seq"""
     seq = tf.cast(seq,tf.float32)
-    cont = tf.nn.conv1d(tf.reshape(seq,(1,-1,1)),tf.reshape(tf.ones(alpha,dtype=tf.float32),(-1,1,1)),padding='SAME',stride=1)
-    cont = cont[0,:,0]
+    cont = conv1d(seq,tf.ones(alpha),1)
     return cont*(1-seq)
   def update_probs(seq,alpha,beta,gamma):
     """Given a binary tensor (float32) where 
@@ -732,12 +754,16 @@ def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
         tokens = tf.concat([tokens,tok],axis=-1)
         counts+=1
         seq = tf.concat([seq[:tok[0]],[1],seq[tok[0]+1:]],axis=0)
+        seq = tf.reshape(seq,(seq_len,))
         return tokens,seq,counts
     def cond(tokens,seq,counts):
         return counts<seq_len
         #return tf.not_equal(tf.shape(tokens)[0],seq_len)
     tokens,seq,counts = body(tokens,seq,counts)
-    tokens,seq,_ = tf.while_loop(cond,body,(tokens,seq,counts))
+    tokens,seq,_ = tf.while_loop(cond,body,(tokens,seq,counts),
+                                 shape_invariants=(tf.TensorShape((None,)),
+                                                   tf.TensorShape((seq_len,)),
+                                                   tf.TensorShape([])))
     return tokens
 
   index = generate_random_seq(seq_len,alpha,beta,gamma,max_seeds)
