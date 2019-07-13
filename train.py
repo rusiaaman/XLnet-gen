@@ -412,7 +412,7 @@ def main(unused_argv):
       tf.logging.info(log_str)
       tf.logging.info("=" * 200)
   else:
-    if not FLAGS.do_eval:
+    if not FLAGS.eval:
       estimator.train(input_fn=train_input_fn, steps=FLAGS.train_steps)
     else:
       # Evaluate every epoch

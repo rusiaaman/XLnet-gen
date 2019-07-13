@@ -7,6 +7,7 @@ from __future__ import print_function
 import json
 import os
 import random
+from functools import partial
 
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import
@@ -918,7 +919,10 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
     non_reuse_len = seq_len - reuse_len
     assert perm_size <= reuse_len and perm_size <= non_reuse_len
 
-    perm_fn = _local_perm if not generative else _generative_perm if not toeval\
+    generative_fn = partial(_generative_perm,alpha=gen_alpha,
+                            beta=gen_beta,gamma=gen_gamma,
+                            max_seeds=max_seeds)
+    perm_fn = _local_perm if not generative else generative_fn if not toeval\
               else _causal_seq
     perm_mask_0, target_0, target_mask_0, input_k_0, input_q_0 = perm_fn(
         inputs[:reuse_len],
