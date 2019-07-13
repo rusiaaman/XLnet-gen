@@ -7,6 +7,7 @@ from __future__ import print_function
 import json
 import os
 import random
+import sys
 from functools import partial
 
 from absl import flags
@@ -698,7 +699,7 @@ def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
     Outputs:
     probability: 1d tensor of probabilities"""
     seq_cont_len = tf.cast(context_len(seq,alpha),dtype=tf.float32)
-    probs = tf.where(tf.greater_equal(seq_cont_len,beta),seq_cont_len**gamma,tf.zeros_like(seq_cont_len))
+    probs = tf.where(tf.greater_equal(seq_cont_len,beta),seq_cont_len**gamma,tf.zeros_like(seq_cont_len),name='where_update')
     return probs/(tf.reduce_sum(probs)+1e-8)
   def random_choice(batch_shape,sample):
     """Generate random samples without replacement.
@@ -716,24 +717,27 @@ def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
     seq = tf.zeros(seq_len,dtype=tf.int32) 
     probs = tf.ones(seq_len)
     tokens = None
-    def body(tokens,seq):
-        if tokens is None:
-            tokens = tf.ones(seq_len,dtype=tf.int32)*-1
+    counts = 0
+    def body(tokens,seq,counts):
+        if counts==0:
             num_seeds = tf.random.uniform((1,),maxval=max_seeds,dtype=tf.int32)[0]+1
             seeds = random_choice(tf.shape(seq)[0:1],num_seeds)
             seed_onehot =  tf.one_hot(seeds,dtype=tf.int32,depth=tf.shape(seq)[0])
             seq = tf.cast(tf.reduce_sum(seed_onehot,axis=0)>0,dtype=tf.int32)
             tokens = seeds
+            counts+=num_seeds
         probs = update_probs(seq,alpha,beta,gamma)
         probs = probs+1e-10
         tok = tf.random.categorical(tf.log(tf.reshape(probs,(1,-1))/tf.reduce_sum(probs)),num_samples=1,dtype=tf.int32)[0]
         tokens = tf.concat([tokens,tok],axis=-1)
+        counts+=1
         seq = tf.concat([seq[:tok[0]],[1],seq[tok[0]+1:]],axis=0)
-        return tokens,seq
-    def cond(tokens,seq):
-        return tf.not_equal(tf.shape(tokens)[0],seq_len)
-    tokens,seq = body(tokens,seq)
-    tokens,seq = tf.while_loop(cond,body,(tokens,seq))
+        return tokens,seq,counts
+    def cond(tokens,seq,counts):
+        return counts<seq_len
+        #return tf.not_equal(tf.shape(tokens)[0],seq_len)
+    tokens,seq,counts = body(tokens,seq,counts)
+    tokens,seq,_ = tf.while_loop(cond,body,(tokens,seq,counts))
     return tokens
 
   index = generate_random_seq(seq_len,alpha,beta,gamma,max_seeds)
@@ -746,7 +750,7 @@ def _generative_perm(inputs, targets, is_masked, perm_size, seq_len,
   target_mask = tf.cast(non_func_tokens,dtype=tf.float32)
 
   # SEP_ID and CLS_ID can attend to all but themseleves
-  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index)
+  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index,name='where_perm')
 
   perm_mask = perm_mask[:, None] <= perm_mask[None, :]
   perm_mask = tf.cast(perm_mask, tf.float32)
@@ -795,7 +799,7 @@ def _causal_seq(inputs, targets, is_masked, perm_size, seq_len):
 
   # SEP_ID and CLS_ID can attend to all but themseleves
   index = tf.range(seq_len)
-  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index)
+  perm_mask = tf.where(func_tokens,1000*tf.ones_like(index),index,name='where_caus')
 
   perm_mask = perm_mask[:, None] <= perm_mask[None, :]
   perm_mask = tf.cast(perm_mask, tf.float32)

@@ -284,7 +284,7 @@ def get_input_fn(split,toeval=False,
     tfrecord_dir = FLAGS.record_info_dir
   reuse_len = FLAGS.reuse_len if not toeval else FLAGS.seq_len
   input_fn, record_info_dict = data_utils.get_input_fn(
-      tfrecord_dir=FLAGS.record_info_dir,
+      tfrecord_dir=tfrecord_dir,
       split=split,
       bsz_per_host=batch_size // FLAGS.num_hosts,
       seq_len=FLAGS.seq_len,
@@ -344,7 +344,7 @@ def main(unused_argv):
                                 get_input_fn(FLAGS.eval_split,
                                             toeval=True,
                                             batch_size=FLAGS.eval_batch_size,
-                                            record_info_dir=FLAGS.record_info_dir_eval)
+                                            tfrecord_dir=FLAGS.record_info_dir_eval)
     num_eval_batch = eval_record_info_dict["num_batch"]
     if FLAGS.max_eval_batch > 0:
       num_eval_batch = min(FLAGS.max_eval_batch, num_eval_batch)
