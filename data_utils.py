@@ -568,8 +568,11 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
           if FLAGS.num_predict is None:
             num_predict_0 = num_predict_1 = None
           else:
+            assert FLAGS.num_predict<=seq_len,"Number of tokens to predict"+\
+                   "cant be more than seq_len"
             num_predict_1 = FLAGS.num_predict // 2
             num_predict_0 = FLAGS.num_predict - num_predict_1
+
           mask_0 = _sample_mask(sp, inp, reverse=reverse,
                                 goal_num_predict=num_predict_0)
           mask_1 = _sample_mask(sp, np.concatenate([a_data, sep_array, b_data,
@@ -1146,7 +1149,8 @@ def get_input_fn(
 
   def input_fn(params):
     """docs."""
-    assert params["batch_size"] * num_core_per_host == bsz_per_host
+    assert params["batch_size"] * num_core_per_host == bsz_per_host,\
+          f'{(params["batch_size"] , num_core_per_host , bsz_per_host)}'
 
     dataset = get_dataset(
         params=params,

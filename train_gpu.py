@@ -376,7 +376,8 @@ def get_placeholder_example():
         "input_q": tf.placeholder(tf.float32, (None, None),name='input_q'),
         "perm_mask": tf.placeholder(tf.float32, (None, None, None),name='perm_mask'),
         "target_mask": tf.placeholder(tf.float32, (None, None),name='target_mask'),
-        "target": tf.placeholder(tf.int32, (None, None),name='target')
+        "target": tf.placeholder(tf.int32, (None, None),name='target'),
+        "target_mapping": tf.placeholder(tf.float32, (None, None, None),name='target_mapping')
     }
 
 def train(ps_device):
@@ -391,7 +392,6 @@ def train(ps_device):
     num_train_batch = train_record_info_dict["num_batch"]
     tf.logging.info("num of train batches {}".format(
                     num_train_batch))
-    
   if toeval:
     assert FLAGS.num_hosts == 1
     # Get eval input function
@@ -434,7 +434,7 @@ def train(ps_device):
 
   gpu_options = tf.GPUOptions(allow_growth=True)
 
-  curr_step = 0
+  curr_step = -1
 
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
@@ -442,10 +442,14 @@ def train(ps_device):
 
     total_loss, prev_step = 0., -1
     while True:
-      if FLAGS.do_eval_only or (curr_step%num_train_batch and toeval):
+      #Todo: for eval+train mode
+      if FLAGS.do_eval_only:
         evaluate(sess,fetches_e,tower_mems_e,eval_example,placeholder_example,num_eval_batch,tower_mems_np_e)
         if FLAGS.do_eval_only:
           break
+
+      if curr_step==-1:
+        tf.logging.info("Begin training")
 
       feed_dict = {a:b for i in range(FLAGS.num_core_per_host)\
                    for k,v in tower_mems_np_train[i].items() \
