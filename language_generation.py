@@ -378,7 +378,7 @@ def prediction_graph_memory():
 
             for i, mem in enumerate(mems):
                 merged_mems.append(
-                    tf.concat([mems[i][1:], new_mems[i][:1]], axis=0))
+                    tf.concat([mems[i][1:], new_mems[i][-2:-1]], axis=0))
             mem_mask = tf.concat(
                 [mem_mask[1:], tf.zeros_like(mem_mask[:1])], axis=0)
             return [
