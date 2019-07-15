@@ -37,12 +37,7 @@ XLNet is a novel permutation based language model. In current implementation of 
 XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a single example are predicted at a time. **More importantly rest of the 512-85 = 427 tokens can attend to each other in the attention mechanism (bidrectional attention)**. This creates problems with conventional causal attention mechanism during language generation. Following problems were faced:
 
   * Use of small context leads to gibberish predictions. Currently a hard-coded random text is included as a leading text followed by `<eod>`, the end of document token, along with the desired context. This helps with small prompts.
-  * Another peculiarity of the XLNet training procedure is presence of context around each target token. Specifically, the targets are prepared by masking n-grams with about (alpha-1)\*n context surrounding the masked tokens, where alpha is set to be 6. That’s the reason why on an average 2.2 consecutive tokens are set for prediction while being surrounded by 11 non-target tokens which can attend to all other non-target tokens.
  
-Because of the above reasons, if causal attention mask is used repeatedly, such as with the gpt-2 or transformer-xl model, the predictions quickly start to degrade. To combat this problem, the default prediction algorithm samples a token then re-calculates all the hidden states with complete bidrectional attention among all the tokens in the sequence, and then predicts the new token. This process is repeated with the new token. 
-   
-   You can try the autogregressive approach where each new token is attended to by on the future tokens (and the self), by setting `--autogressive` flag. This is achieved by caching the hidden states in the 'memory' of transformer-xl. This also makes the prediction about 4 times faster.
-   
 ## Explanation of flags (specific to XLNet-gen)
 
 * `--max_mem_length` Max sequence length used for prediction. NOTE: number of tokens to be predicted can be greater than this, but the context gets truncated at the beginning. For `--autoregressive` case, this sets the size of the 'memory'.
