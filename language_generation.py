@@ -79,8 +79,8 @@ parser.add_argument("--temperature", default=1,
                     help="Scaling factor for logits", type=int)
 parser.add_argument("--num_toks_pred", default=1024,
                     help="Number of tokens to predict", type=int)
-parser.add_argument("--autoregressive", help="Use autoregressive approach"
-                    "for prediction. (Gives bad results but is fast)",
+parser.add_argument("--bidrectional_eachstep", help="Compute bidirectional"
+                    "attention every step. Consumes a lot of time but better results",
                     action='store_true')
 
 FLAGS = parser.parse_args()
@@ -558,6 +558,7 @@ def main():
                  with people, even a bishop, begging for his blessing. """
     pad_ids = tokenize_fn(pad_txt)
     pad_ids.append(EOD_ID)
+    pad_ids = [EOD_ID]
 
     def parse_ids(toks):
         """Uses sentencepiece to conver to text. Subsitute
@@ -569,7 +570,7 @@ def main():
                      if eops[i - 1] + 1 < eops[i]]
         return "\n\n".join(map(sp.decode_ids, sentences))
 
-    if FLAGS.autoregressive:
+    if not FLAGS.bidrectional_eachstep:
         prediction_graph = prediction_graph_memory
     else:
         prediction_graph = prediction_graph_no_memory
