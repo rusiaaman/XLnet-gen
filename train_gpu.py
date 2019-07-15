@@ -439,7 +439,7 @@ def train(ps_device):
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
     sess.run(tf.global_variables_initializer())
-
+    #ToDo: figure out prev_step for resuming training
     total_loss, prev_step = 0., -1
     while True:
       #Todo: for eval+train mode
