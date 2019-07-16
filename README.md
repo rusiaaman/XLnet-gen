@@ -37,6 +37,7 @@ XLNet is a novel permutation based language model. In current implementation of 
 XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a single example are predicted at a time. **More importantly rest of the 512-85 = 427 tokens can attend to each other in the attention mechanism (bidrectional attention)**. This creates problems with conventional causal attention mechanism during language generation. Following problems were faced:
 
   * Use of small context leads to gibberish predictions. Currently a hard-coded random text is included as a leading text followed by `<eod>`, the end of document token, along with the desired context. This helps with small prompts.
+  * Due to the nature of pretraining, context tokens attend to each other in bi-directional way. And the context is spread throughout the input of the model. Because of this generating tokens left to right in causal way leads to suboptimal output. Recalculating hidden states each step allows us to have bidirectional attention to each new generated token which substantially improve the generation. To do the same use `--bidirectional_eachstep` flag
  
 ## Explanation of flags (specific to XLNet-gen)
 
@@ -48,11 +49,11 @@ XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a s
 * `--top_p` top_p paramter for nucleus sampling. Set this 0 if you want to use top_k sampling process.
 * `--top_k` top_k parameter for top_k sampling. Only top_k most probable tokens are considered for sampling. Set `top_p=0` if you want to use this.
 * `--unconditional` Generates unconditional samples. Ignores `--interactive` and `--input_file` flags.
-   
+* `--bidirectional_eachstep` leads to better output at the expense of computation. Explanation in methodology.
 
 ## Sampling schemes
 - [x] top-k sampling: use `--top_k` flag, ensure `--top_p=0`
-- [x] top-p sampling: use `--top_p` flag
+- [x] Nucleus sampling: use `--top_p` flag
 - [ ] Permutation sampling
 
 
