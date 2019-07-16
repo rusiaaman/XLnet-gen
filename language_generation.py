@@ -558,7 +558,6 @@ def main():
                  with people, even a bishop, begging for his blessing. """
     pad_ids = tokenize_fn(pad_txt)
     pad_ids.append(EOD_ID)
-    pad_ids = [EOD_ID]
 
     def parse_ids(toks):
         """Uses sentencepiece to conver to text. Subsitute
