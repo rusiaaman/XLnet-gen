@@ -569,7 +569,7 @@ def main():
                      if eops[i - 1] + 1 < eops[i]]
         return "\n\n".join(map(sp.decode_ids, sentences))
 
-    if not FLAGS.bidrectional_eachstep:
+    if not FLAGS.bidirectional_eachstep:
         prediction_graph = prediction_graph_memory
     else:
         prediction_graph = prediction_graph_no_memory
