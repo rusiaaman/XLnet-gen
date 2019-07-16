@@ -79,19 +79,13 @@ parser.add_argument("--temperature", default=1,
                     help="Scaling factor for logits", type=int)
 parser.add_argument("--num_toks_pred", default=1024,
                     help="Number of tokens to predict", type=int)
-parser.add_argument("--bidrectional_eachstep", help="Compute bidirectional"
+parser.add_argument("--bidirectional_eachstep", help="Compute bidirectional"
                     "attention every step. Consumes a lot of time but better results",
                     action='store_true')
 
 FLAGS = parser.parse_args()
 
-
-def _create_mask(qlen, mlen):
-    """Simple bi-directional attention mask. Attend
-    to all token in sequence and memory"""
-    klen = qlen + mlen
-    return tf.zeros((qlen, klen))
-
+from modeling import _create_mask
 def get_preprocessor(examples, tokenize_fn, pad_ids):
     """
     Input:
