@@ -85,7 +85,13 @@ parser.add_argument("--bidirectional_eachstep", help="Compute bidirectional"
 
 FLAGS = parser.parse_args()
 
-from modeling import _create_mask
+
+def _create_mask(qlen, mlen):
+    """Simple bi-directional attention mask. Attend
+    to all token in sequence and memory"""
+    klen = qlen + mlen
+    return tf.zeros((qlen, klen))
+
 def get_preprocessor(examples, tokenize_fn, pad_ids):
     """
     Input:
