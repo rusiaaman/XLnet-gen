@@ -79,8 +79,8 @@ parser.add_argument("--temperature", default=1,
                     help="Scaling factor for logits", type=int)
 parser.add_argument("--num_toks_pred", default=1024,
                     help="Number of tokens to predict", type=int)
-parser.add_argument("--autoregressive", help="Use autoregressive approach"
-                    "for prediction. (Gives bad results but is fast)",
+parser.add_argument("--bidirectional_eachstep", help="Compute bidirectional"
+                    "attention every step. Consumes a lot of time but better results",
                     action='store_true')
 
 FLAGS = parser.parse_args()
@@ -378,7 +378,7 @@ def prediction_graph_memory():
 
             for i, mem in enumerate(mems):
                 merged_mems.append(
-                    tf.concat([mems[i][1:], new_mems[i][:1]], axis=0))
+                    tf.concat([mems[i][1:], new_mems[i][-2:-1]], axis=0))
             mem_mask = tf.concat(
                 [mem_mask[1:], tf.zeros_like(mem_mask[:1])], axis=0)
             return [
@@ -559,17 +559,29 @@ def main():
     pad_ids = tokenize_fn(pad_txt)
     pad_ids.append(EOD_ID)
 
+    to_special_symbol = {v:k for k,v in special_symbols.items()}
     def parse_ids(toks):
         """Uses sentencepiece to conver to text. Subsitute
-        EOP_ID with new line"""
-        eops = [i for i, t in enumerate(toks) if t == EOP_ID]
-        eops = [-1] + eops + [len(toks)]
-        sentences = [toks[eops[i - 1] + 1:eops[i]]
-                     for i in range(1, len(eops))
-                     if eops[i - 1] + 1 < eops[i]]
-        return "\n\n".join(map(sp.decode_ids, sentences))
+        EOP_ID and EOD_ID with new lines, and rest with their names"""
+        start = 0
+        sent = ""
+        for i in range(len(toks)):
+          if toks[i] in to_special_symbol:
+            if start<i:
+              sent+=sp.decode_ids(toks[start:i])
+            if toks[i] in [EOD_ID,EOP_ID]:
+                replace_by = "\n\n"
+            else:
+                replace_by = to_special_symbol[toks[i]]
 
-    if FLAGS.autoregressive:
+            sent+=f" {replace_by} "
+            start=i+1
+        if start<len(toks):
+          sent+=sp.decode_ids(toks[start:])
+
+        return sent
+
+    if not FLAGS.bidirectional_eachstep:
         prediction_graph = prediction_graph_memory
     else:
         prediction_graph = prediction_graph_no_memory
