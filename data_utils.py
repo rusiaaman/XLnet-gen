@@ -233,9 +233,11 @@ def create_data(_):
   if not FLAGS.use_tpu:
     FLAGS.num_core_per_host = 1  # forced to be one
 
-  #For eval case reuse is forced to be same as 
-  if FLAGS.eval:
+  #For eval case generative reuse is forced to be same as 
+  if FLAGS.eval and FLAGS.generative:
     FLAGS.reuse_len = FLAGS.seq_len
+    tf.logging.warning("Changing reuse_len to be equal"
+      "to seq_len since eval flag is received for generative case")
 
   # Make workdirs
   if not tf.gfile.Exists(FLAGS.save_dir):
@@ -452,7 +454,6 @@ def _sample_mask(sp, seg, reverse=False, max_gram=5, goal_num_predict=None):
     num_predict += end - beg
 
     cur_len = end + r_ctx
-
   while goal_num_predict is not None and num_predict < goal_num_predict:
     i = np.random.randint(seg_len)
     if not mask[i]:

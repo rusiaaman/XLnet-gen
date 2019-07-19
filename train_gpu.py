@@ -214,7 +214,8 @@ def get_input_fn(split,toeval=False,
   #assert split == "train"
   if batch_size is None: 
     batch_size = FLAGS.train_batch_size
-  reuse_len = FLAGS.reuse_len if not toeval else FLAGS.seq_len
+  reuse_len = FLAGS.reuse_len if not (toeval and FLAGS.generative)\
+              else FLAGS.seq_len
   input_fn, record_info_dict = data_utils.get_input_fn(
       tfrecord_dir=FLAGS.record_info_dir,
       split=split,
@@ -305,6 +306,10 @@ def build_graph(ps_device,example,bsz_per_core,is_training):
     fetches = [loss, tower_new_mems, global_step, gnorm, learning_rate, train_op]
   else:
     fetches = [loss, tower_new_mems]
+
+  if tower_new_mems['mems'][0] is None:
+    # We have mem_len==0
+    fetches[1] = tf.constant([])
   return fetches,tower_mems,tower_mems_np,saver
 
 
@@ -361,6 +366,9 @@ def evaluate(sess, fetches, tower_mems, eval_example, example_placeholder, num_e
 
     loss_np,tower_mems_np_eval = sess.run(fetches[:2], feed_dict = feed_dict)
 
+    if len(tower_mems_np_eval)==0: # We have mem_len==0
+      tower_mems_np_eval = tower_mems_np
+
     losses.append(loss_np)
 
     tf.logging.info(f"{i}/{num_eval_batch} loss: {loss_np}")
@@ -383,8 +391,6 @@ def get_placeholder_example():
 def train(ps_device):
   ##### Get input function and model function
   toeval = FLAGS.eval or FLAGS.do_eval_only
-  assert not toeval or (toeval and FLAGS.generative), ("Evaluation not"
-        "supproted for non-generative language modelling")
 
   if not FLAGS.do_eval_only:
     # Get train input function
@@ -422,7 +428,7 @@ def train(ps_device):
 
   if not FLAGS.do_eval_only:
     params = {
-        "batch_size": FLAGS.eval_batch_size # the whole batch
+        "batch_size": FLAGS.train_batch_size # the whole batch
     }
     train_set = train_input_fn(params)
     train_example = train_set.make_one_shot_iterator().get_next()
@@ -435,6 +441,8 @@ def train(ps_device):
   gpu_options = tf.GPUOptions(allow_growth=True)
 
   curr_step = -1
+
+  tower_mems_np_train_new = tower_mems_np_train
 
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
@@ -452,10 +460,10 @@ def train(ps_device):
         tf.logging.info("Begin training")
 
       feed_dict = {a:b for i in range(FLAGS.num_core_per_host)\
-                   for k,v in tower_mems_np_train[i].items() \
+                   for k,v in tower_mems_np_train_new[i].items() \
                    for a,b in zip(tower_mems[i][k],v)}
 
-      done,tower_mems_np_train, total_loss, prev_step, curr_step=\
+      done,tower_mems_np_train_new, total_loss, prev_step, curr_step=\
                                 train_step(sess,
                                             fetches,
                                             feed_dict,
@@ -464,7 +472,8 @@ def train(ps_device):
                                             saver,
                                             total_loss,
                                             prev_step)
-
+      if len(tower_mems_np_train_new)==0:
+        tower_mems_np_train_new = tower_mems_np_train
       if done:
         break
       
@@ -481,8 +490,6 @@ def main(unused_argv):
 
   if not tf.gfile.Exists(FLAGS.model_dir):
     tf.gfile.MakeDirs(FLAGS.model_dir)
-
-  FLAGS.eval_batch_size = FLAGS.train_batch_size #ToDo: handle different eval and train BS
 
   train("/gpu:0")
 
