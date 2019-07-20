@@ -59,7 +59,7 @@ XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a s
 
 ## Notes on quality of the samples
 - There is a vast difference in quality with and without `bidirectional_eachstep` flag, which turns on re-calculation of hidden states with bidirectional attention everytime a new token is generated. This is probably due to the way XLNet was pretrained--with sparse masks and bidrectional context. However, I am currently investigating this issue and this could be an area of improvement for XLNet.
-- Generation of artifacts like empty quotes `""`, `" "`, multiple hyphens `---`, and combination of them `""-"` can all be attributed to bad training data. **Specifically, there seems to bugs in https://github.com/attardi/wikiextractor which leads to generation of empty quotes. **
+- Generation of artifacts like empty quotes `""`, `" "`, multiple hyphens `---`, and combination of them `""-"` can all be attributed to bad training data. **Specifically, there seems to be bugs in https://github.com/attardi/wikiextractor which leads to generation of empty quotes and other such artifacts.** This is probably the same library that was used by the authors.
 - Wikipedia has a lot of ellipses in its articles which is reflected in the generation. The wiki data dump has it in the form with and without spaces: both `. . .`, and `...`. 
 - The XLNet can only predict end of paragraph and end of documents, but not new line characters or tabs, so it doesn't generate good structure of the documents
 - Vocabulary is limited to English and not all Unicode characters are in the vocabulary. Other language characters and emojis can't be generated are decoded as <unk>. 
