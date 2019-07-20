@@ -307,7 +307,7 @@ def build_graph(ps_device,example,bsz_per_core,is_training):
   else:
     fetches = [loss, tower_new_mems]
 
-  if tower_new_mems['mems'][0] is None:
+  if tower_new_mems[0]['mems'][0] is None:
     # We have mem_len==0
     fetches[1] = tf.constant([])
   return fetches,tower_mems,tower_mems_np,saver
