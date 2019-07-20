@@ -28,7 +28,8 @@ Colab notebook where you can give prompts:  https://colab.research.google.com/dr
         --max_mem_length=256\
         --num_toks_pred=256\
         --num_samples=1\
-        --top_p=0.9
+        --top_p=0.9\
+        --bidirectional_eachstep
    ```
 # Important Notes
 ## Methodology
@@ -49,13 +50,19 @@ XLNet is trained using `num_predict=85`, which means 85 tokens out of 512 in a s
 * `--top_p` top_p paramter for nucleus sampling. Set this 0 if you want to use top_k sampling process.
 * `--top_k` top_k parameter for top_k sampling. Only top_k most probable tokens are considered for sampling. Set `top_p=0` if you want to use this.
 * `--unconditional` Generates unconditional samples. Ignores `--interactive` and `--input_file` flags.
-* `--bidirectional_eachstep` leads to better output at the expense of computation. Explanation in methodology.
+* `--bidirectional_eachstep` leads to much better output at the expense of computation. Explanation in methodology.
 
 ## Sampling schemes
 - [x] top-k sampling: use `--top_k` flag, ensure `--top_p=0`
 - [x] Nucleus sampling: use `--top_p` flag
 - [ ] Permutation sampling
 
+## Notes on quality of the samples
+- There is a vast difference in quality with and without `bidirectional_eachstep` flag, which turns on re-calculation of hidden states with bidirectional attention everytime a new token is generated. This is probably due to the way XLNet was pretrained--with sparse masks and bidrectional context. However, I am currently investigating this issue and this could be an area of improvement for XLNet.
+- Generation of artifacts like empty quotes `""`, `" "`, multiple hyphens `---`, and combination of them `""-"` can all be attributed to bad training data. **Specifically, there seems to bugs in https://github.com/attardi/wikiextractor which leads to generation of empty quotes. **
+- Wikipedia has a lot of ellipses in its articles which is reflected in the generation. The wiki data dump has it in the form with and without spaces: both `. . .`, and `...`. 
+- The XLNet can only predict end of paragraph and end of documents, but not new line characters or tabs, so it doesn't generate good structure of the documents
+- Vocabulary is limited to English and not all Unicode characters are in the vocabulary. Other language characters and emojis can't be generated are decoded as <unk>. 
 
 # Samples
 **We’ve trained a large-scale unsupervised language model which generates coherent paragraphs of text, achieves state-of-the-art performance on many language modeling benchmarks, and performs rudimentary reading comprehension, machine translation, question answering, and summarization** tasks in our lab using automated translation/text analysis with an automated computer system, Pro (Pro Text Analysis). From this training we have developed an automated translation tool, Pro Translation. Our system is known as the Pro Translation Suite, and is designed for translation between text, computer documents, and web pages. All of the tools in the Pro Translation Suite provide both text and "real time" translation. The program also features extensive user-friendly interfaces for user-directed development and customization of the software. The Pro Translation Suite features a number of features which offer new and innovative translation tasks. In addition, the Pro Translation Suite offers enhanced support for "realtime" translation systems, such as translation for Web pages, "real time" translation of language models, and machine translation.
