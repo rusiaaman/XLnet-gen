@@ -1064,7 +1064,7 @@ def get_input_fn(
     max_seeds=None,
     toeval=False):
   
-  if generative:
+  if generative and toeval:
     # Merge all record infos into a single one
     record_glob_base = format_filename_gen(
         prefix="record_info-{}-*".format(split),
