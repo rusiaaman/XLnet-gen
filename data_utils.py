@@ -286,7 +286,7 @@ def create_data(_):
 
   record_prefix = "record_info-{}-{}-{}".format(
       FLAGS.split, FLAGS.task, FLAGS.pass_id)
-  if FLAGS.generative:
+  if FLAGS.generative and FLAGS.eval:
     record_name = format_filename_gen(
         prefix=record_prefix,
         bsz_per_host=FLAGS.bsz_per_host,
@@ -492,7 +492,7 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
 
   tf.logging.info("Raw data shape %s.", data.shape)
 
-  if not FLAGS.generative:
+  if not (FLAGS.generative and FLAGS.eval):
     file_name = format_filename(
         prefix=basename,
         bsz_per_host=bsz_per_host,
