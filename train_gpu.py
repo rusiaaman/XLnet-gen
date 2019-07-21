@@ -442,7 +442,8 @@ def train(ps_device):
 
   curr_step = -1
 
-  tower_mems_np_train_new = tower_mems_np_train
+  if not FLAGS.do_eval_only:
+    tower_mems_np_train_new = tower_mems_np_train
 
   with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
       gpu_options=gpu_options)) as sess:
