@@ -124,7 +124,8 @@ def two_stream_loss(FLAGS, features, labels, mems, is_training):
 def get_loss(FLAGS, features, labels, mems, is_training):
   """Pretraining loss with two-stream attention Transformer-XL."""
   if FLAGS.use_bfloat16:
-    with tf.tpu.bfloat16_scope():
+    from tensorflow.contrib.tpu.python.tpu import bfloat16
+    with bfloat16.bfloat16_scope():
       return two_stream_loss(FLAGS, features, labels, mems, is_training)
   else:
     return two_stream_loss(FLAGS, features, labels, mems, is_training)
