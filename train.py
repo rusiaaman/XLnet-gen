@@ -152,9 +152,9 @@ flags.DEFINE_float("gen_gamma",0.5,
                   "for harder optimization but more bi-directionality")
 flags.DEFINE_integer("max_seeds",5,
                   help="Maximum number of seed tokens")
-flags.DEFINE_integer("mem_drop",False,
+flags.DEFINE_bool("mem_drop",False,
                   help="randomly drop memory from some batches")
-flags.DEFINE_integer("mem_drop_scale",2,
+flags.DEFINE_float("mem_drop_scale",2.,
                   help="scale of dropping of memory")
 # Evaluation
 flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
