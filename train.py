@@ -152,6 +152,10 @@ flags.DEFINE_float("gen_gamma",0.5,
                   "for harder optimization but more bi-directionality")
 flags.DEFINE_integer("max_seeds",5,
                   help="Maximum number of seed tokens")
+flags.DEFINE_integer("mem_drop",False,
+                  help="randomly drop memory from some batches")
+flags.DEFINE_integer("mem_drop_scale",2,
+                  help="scale of dropping of memory")
 # Evaluation
 flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
                   "This will use only generate causal masking")
@@ -181,6 +185,16 @@ def metric_fn(loss):
       "bpc": tf.metrics.mean(bpc),
   }
 
+def get_drop_mask(batch_size):
+  """Randomly drops few instances in a batch according
+  to a probability distribution which insures some indices of
+  the batch are never dropped"""
+  p_notdrop = tf.math.tanh(tf.arange(1,batch_size+1)*32/(batch_size*FLAGS.mem_drop_scale))
+  to_logits = tf.concat([1-p_notdrop[:,None],p_notdrop[:,None]],axis=-1)
+  to_logits = tf.log(to_logits)
+  return tf.random.categorical(to_logits,num_samples=1,dtype=tf.float32)[:,0]
+
+
 def get_model_fn():
   """doc."""
   def model_fn(features, labels, mode, params):
@@ -202,7 +216,13 @@ def get_model_fn():
     #### Turn `new_mems` into `new_cache`
     new_cache = []
     if FLAGS.mem_len > 0:
-      new_cache += new_mems["mems"]
+      if not (FLAGS.is_training and FLAGS.mem_drop):
+        new_cache += new_mems["mems"]
+      else:
+        # Dropping some memory
+        drop_masks = get_drop_mask(tf.shape(new_mems['mems'][0])[1])
+        new_cache = [[drop_masks[None,:,None]*mem 
+                          for mem in new_mems['mems']]]
 
     #### Check model parameters
     num_params = sum([np.prod(v.shape) for v in tf.trainable_variables()])
