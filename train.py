@@ -189,10 +189,12 @@ def get_drop_mask(batch_size):
   """Randomly drops few instances in a batch according
   to a probability distribution which insures some indices of
   the batch are never dropped"""
-  p_notdrop = tf.math.tanh(tf.arange(1,batch_size+1)*32/(batch_size*FLAGS.mem_drop_scale))
+  tf_float = tf.bfloat16 if FLAGS.use_bfloat16 else tf.float32
+  indices = tf.cast(tf.range(1,batch_size+1),dtype=tf_float)
+  p_notdrop = tf.math.tanh(indices*32/(batch_size*FLAGS.mem_drop_scale))
   to_logits = tf.concat([1-p_notdrop[:,None],p_notdrop[:,None]],axis=-1)
   to_logits = tf.log(to_logits)
-  return tf.random.categorical(to_logits,num_samples=1,dtype=tf.float32)[:,0]
+  return tf.random.categorical(to_logits,num_samples=1,dtype=tf_float)[:,0]
 
 
 def get_model_fn():
@@ -216,11 +218,13 @@ def get_model_fn():
     #### Turn `new_mems` into `new_cache`
     new_cache = []
     if FLAGS.mem_len > 0:
-      if not (FLAGS.is_training and FLAGS.mem_drop):
+      if not (is_training and FLAGS.mem_drop):
         new_cache += new_mems["mems"]
       else:
         # Dropping some memory
-        drop_masks = get_drop_mask(tf.shape(new_mems['mems'][0])[1])
+        bsz = tf.shape(new_mems['mems'][0])[1]
+        bsz = tf.cast(bsz,dtype=tf.in32)
+        drop_masks = get_drop_mask(bsz)
         new_cache = [[drop_masks[None,:,None]*mem 
                           for mem in new_mems['mems']]]
 
