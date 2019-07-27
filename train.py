@@ -193,10 +193,12 @@ def get_drop_mask(batch_size):
   the batch are never dropped"""
   tf_float = tf.bfloat16 if FLAGS.use_bfloat16 else tf.float32
   indices = tf.cast(tf.range(1,batch_size+1),dtype=tf_float)
+  batch_size = tf.cast(batch_size,dtype=tf_float)
   p_notdrop = tf.math.tanh(indices*32/(batch_size*FLAGS.mem_drop_scale))
   to_logits = tf.concat([1-p_notdrop[:,None],p_notdrop[:,None]],axis=-1)
   to_logits = tf.log(to_logits)
-  return tf.random.categorical(to_logits,num_samples=1,dtype=tf_float)[:,0]
+  return tf.cast(tf.random.categorical(to_logits,num_samples=1,dtype=tf.int32)[:,0],
+                 dtype=tf_float)
 
 
 def get_model_fn():
@@ -224,11 +226,10 @@ def get_model_fn():
         new_cache += new_mems["mems"]
       else:
         # Dropping some memory
-        bsz = tf.shape(new_mems['mems'][0])[1]
-        bsz = tf.cast(bsz,dtype=tf.in32)
+        bsz = params['batch_size']
         drop_masks = get_drop_mask(bsz)
-        new_cache = [[drop_masks[None,:,None]*mem 
-                          for mem in new_mems['mems']]]
+        new_cache = [drop_masks[None,:,None]*mem 
+                          for mem in new_mems['mems']]
 
     #### Check model parameters
     num_params = sum([np.prod(v.shape) for v in tf.trainable_variables()])
