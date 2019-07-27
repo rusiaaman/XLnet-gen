@@ -918,7 +918,7 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
                 num_batch, seq_len, reuse_len, perm_size, mask_alpha,
                 mask_beta, use_bfloat16=False, num_predict=None,
                 generative=False,gen_alpha=7,gen_beta=1,gen_gamma=0.5,
-                max_seeds=5,toeval=False):
+                max_seeds=5,single_left_seed=False,toeval=False):
 
   bsz_per_core = params["batch_size"]
   if num_hosts > 1:
@@ -956,8 +956,10 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
     generative_fn = partial(_generative_perm,alpha=gen_alpha,
                             beta=gen_beta,gamma=gen_gamma,
                             max_seeds=max_seeds)
-    perm_fn = _local_perm if not generative else generative_fn if not toeval\
-              else _causal_seq
+    perm_fn = _local_perm if not generative else \
+              _causal_seq if (toeval or single_left_seed)\
+              else generative_fn
+
     perm_mask_0, target_0, target_mask_0, input_k_0, input_q_0 = perm_fn(
         inputs[:reuse_len],
         target[:reuse_len],
@@ -1062,7 +1064,8 @@ def get_input_fn(
     gen_beta=None,
     gen_gamma=None,
     max_seeds=None,
-    toeval=False):
+    toeval=False,
+    single_left_seed=False):
   
   if generative and toeval:
     # Merge all record infos into a single one
@@ -1172,6 +1175,7 @@ def get_input_fn(
         gen_beta=gen_beta,
         gen_gamma=gen_gamma,
         max_seeds=max_seeds,
+        single_left_seed=single_left_seed,
         toeval=toeval)
 
     return dataset
