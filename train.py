@@ -158,6 +158,8 @@ flags.DEFINE_float("mem_drop_scale",2.,
                   help="scale of dropping of memory")
 flags.DEFINE_bool("single_left_seed",False,
                   help="Use only one seed at left most point")
+flags.DEFINE_bool("mix",False,
+                  help="Mix bidirectional training with generative training")
 # Evaluation
 flags.DEFINE_bool("eval",False,help="Whether to generate masks for evaluation."
                   "This will use only generate causal masking")
@@ -332,6 +334,7 @@ def get_input_fn(split,toeval=False,
       gen_gamma=FLAGS.gen_gamma,
       max_seeds=FLAGS.max_seeds,
       single_left_seed=FLAGS.single_left_seed,
+      mix=FLAGS.mix,
       toeval=toeval)
 
   return input_fn, record_info_dict
