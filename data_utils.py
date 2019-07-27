@@ -989,22 +989,26 @@ def get_dataset(params, num_hosts, num_core_per_host, split, file_names,
           is_masked[reuse_len:],
           perm_size,
           non_reuse_len)
-      mix_or_not tf.random.uniform((1,),dtype=tf.dtypes.float32)
+      mix_or_not = tf.random.uniform((1,),dtype=tf.dtypes.float32)
 
       mix_or_not = tf.less(mix_or_not,1/3)
+      mix_or_not =  tf.cast(mix_or_not,dtype=tf.float32)
 
       perm_mask_0 = perm_mask_0*(1-mix_or_not[None,0])+mix_or_not[None,0]*perm_mask_2
-      target_0 = target_0*(1-mix_or_not) + target_2*mix_or_not
       target_mask_0 = target_mask_0*(1-mix_or_not) + target_mask_2*mix_or_not
-      input_k_0 = input_k_0*(1-mix_or_not) + input_k_2*mix_or_not
       input_q_0 = input_q_0*(1-mix_or_not) + input_q_2*mix_or_not
 
-
       perm_mask_1 = perm_mask_1*(1-mix_or_not[None,0])+mix_or_not[None,0]*perm_mask_3
-      target_1 = target_1*(1-mix_or_not) + target_3*mix_or_not
       target_mask_1 = target_mask_1*(1-mix_or_not) + target_mask_3*mix_or_not
-      input_k_1 = input_k_1*(1-mix_or_not) + input_k_3*mix_or_not
       input_q_1 = input_q_1*(1-mix_or_not) + input_q_3*mix_or_not
+
+      mix_or_not =  tf.cast(mix_or_not,dtype=tf.int64)
+
+      input_k_0 = input_k_0*(1-mix_or_not) + input_k_2*mix_or_not
+      target_0 = target_0*(1-mix_or_not) + target_2*mix_or_not
+
+      input_k_1 = input_k_1*(1-mix_or_not) + input_k_3*mix_or_not
+      target_1 = target_1*(1-mix_or_not) + target_3*mix_or_not
 
 
     perm_mask_0 = tf.concat([perm_mask_0, tf.ones([reuse_len, non_reuse_len])],
