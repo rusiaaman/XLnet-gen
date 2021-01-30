@@ -1,4 +1,9 @@
+# Update 30-01-2021
+This repository is archived. Please use https://github.com/huggingface/transformers which supports XLNet language generation in both pytorch and tensorflow
+
 # XLnet-gen
+
+
 Generate language using [XLNet](https://github.com/zihangdai/xlnet/). This is not an official implementation. Samples are included at the end of this README as well as in the `samples` folder.
 
 Medium article as a summary of this effort: https://medium.com/@amanrusia/xlnet-speaks-comparison-to-gpt-2-ea1a4e9ba39e
